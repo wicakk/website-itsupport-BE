@@ -63,18 +63,22 @@ class UserController extends Controller
         return response()->json($user->loadCount(['requestedTickets','assignedTickets']));
     }
 
-    public function update(Request $request, User $user): JsonResponse
+    public function update(Request $request, User $user)
     {
-        $data = $request->validate([
-            'name'       => 'sometimes|string|max:255',
-            'role'       => ['sometimes', Rule::in(['super_admin','manager_it','it_support','user'])],
-            'department' => 'sometimes|nullable|string|max:100',
-            'phone'      => 'sometimes|nullable|string|max:20',
+        $validated = $request->validate([
+            'name' => 'required|string|max:255',
+            'email' => 'required|email|unique:users,email,' . $user->id,
+            'department' => 'nullable|string|max:255',
+            'role' => 'required|string',
+            'is_active' => 'required|boolean',
         ]);
 
-        $user->update($data);
+        $user->update($validated);
 
-        return response()->json(['message' => 'User diperbarui.', 'user' => $user->fresh()]);
+        return response()->json([
+            'message' => 'User updated successfully',
+            'data' => $user
+        ]);
     }
 
     public function destroy(User $user): JsonResponse
