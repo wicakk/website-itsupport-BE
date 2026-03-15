@@ -124,7 +124,7 @@ class AssetController extends Controller
             'interval'  => $request->interval,
             'next_date' => $request->next_date,
             'notes'     => $request->notes,
-            'status'    => 'Terjadwal',
+            'status'    => 'Pending', // fix: was 'Terjadwal' which is not a valid enum value
         ]);
 
         return response()->json(['data' => $pm]);
