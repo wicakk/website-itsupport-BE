@@ -82,4 +82,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('monitoring/{server}/ping', [ServerMonitorController::class, 'ping']);
     Route::delete('monitoring/{server}', [ServerMonitorController::class, 'destroy']);
 
+
+    Route::get('notifications', function () {
+        return response()->json([
+            'data'  => [],
+            'total' => 0,
+        ]);
+    });
+
 });
