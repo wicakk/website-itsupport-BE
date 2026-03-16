@@ -1,4 +1,3 @@
-// app/Events/ServerMetricsUpdated.php
 <?php
 
 namespace App\Events;
@@ -24,7 +23,6 @@ class ServerMetricsUpdated implements ShouldBroadcast
         return 'metrics.updated';
     }
 
-    // Data yang dikirim ke frontend
     public function broadcastWith(): array
     {
         return [

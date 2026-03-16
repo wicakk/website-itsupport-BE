@@ -80,5 +80,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('monitoring/{server}',     [ServerMonitorController::class, 'show']);
     Route::post('monitoring',             [ServerMonitorController::class, 'store']); 
     Route::post('monitoring/{server}/ping', [ServerMonitorController::class, 'ping']);
+    Route::delete('monitoring/{server}', [ServerMonitorController::class, 'destroy']);
 
 });

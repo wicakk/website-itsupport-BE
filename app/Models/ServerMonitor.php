@@ -7,9 +7,9 @@ use Illuminate\Database\Eloquent\Model;
 class ServerMonitor extends Model
 {
     protected $fillable = [
-        'name','ip_address','hostname','os','status',
-        'uptime','cpu_usage','ram_usage','disk_usage',
-        'last_checked_at','is_monitored',
+        'name', 'ip_address', 'port', 'hostname', 'os', 'status',
+        'uptime', 'cpu_usage', 'ram_usage', 'disk_usage',
+        'last_checked_at', 'is_monitored',
     ];
 
     protected $casts = [

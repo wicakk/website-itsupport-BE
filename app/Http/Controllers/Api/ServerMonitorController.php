@@ -63,4 +63,9 @@ class ServerMonitorController extends Controller
 
         return response()->json(['server' => $server], 201);
     }
+    public function destroy(ServerMonitor $server): JsonResponse
+    {
+        $server->delete();
+        return response()->json(['message' => "Server {$server->name} berhasil dihapus."]);
+    }
 }

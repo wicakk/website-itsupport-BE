@@ -83,6 +83,7 @@ return new class extends Migration
             $table->unsignedTinyInteger('disk_usage')->default(0);
             $table->timestamp('last_checked_at')->nullable();
             $table->boolean('is_monitored')->default(true);
+            $table->integer('port')->default(9090);
             $table->timestamps();
         });
     }

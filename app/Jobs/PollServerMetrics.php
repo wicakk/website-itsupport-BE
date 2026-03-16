@@ -25,17 +25,17 @@ class PollServerMetrics implements ShouldQueue
                 );
 
                 if ($res->ok()) {
-                    $d = $res->json();
+                    $d    = $res->json();
+                    $cpu  = (float) ($d['cpu']['percent']     ?? 0);
+                    $ram  = (float) ($d['memory']['percent']  ?? 0);
+                    $disk = (float) ($d['storage']['percent'] ?? 0);
+
                     $server->update([
-                        'cpu_usage'       => round($d['cpu']['percent']     ?? $d['cpu']  ?? 0),
-                        'ram_usage'       => round($d['memory']['percent']  ?? $d['ram']  ?? 0),
-                        'disk_usage'      => round($d['storage']['percent'] ?? $d['disk'] ?? 0),
+                        'cpu_usage'       => $cpu,
+                        'ram_usage'       => $ram,
+                        'disk_usage'      => $disk,
                         'uptime'          => $d['uptime'] ?? null,
-                        'status'          => $this->calcStatus(
-                            $d['cpu']['percent']     ?? 0,
-                            $d['memory']['percent']  ?? 0,
-                            $d['storage']['percent'] ?? 0
-                        ),
+                        'status'          => $this->calcStatus($cpu, $ram, $disk),
                         'last_checked_at' => now(),
                     ]);
                 }
