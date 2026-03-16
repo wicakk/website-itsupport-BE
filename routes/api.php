@@ -76,8 +76,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('reports/export', [ReportController::class, 'export']);
 
     // Server Monitoring
-    Route::get('monitoring', [ServerMonitorController::class, 'index']);
-    Route::get('monitoring/{server}', [ServerMonitorController::class, 'show']);
+    Route::get('monitoring',              [ServerMonitorController::class, 'index']);
+    Route::get('monitoring/{server}',     [ServerMonitorController::class, 'show']);
+    Route::post('monitoring',             [ServerMonitorController::class, 'store']); 
     Route::post('monitoring/{server}/ping', [ServerMonitorController::class, 'ping']);
 
 });

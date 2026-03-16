@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\ServerMonitor;
+use App\Events\ServerMetricsUpdated;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 
@@ -13,7 +14,6 @@ class ServerMonitorController extends Controller
     {
         $servers = ServerMonitor::monitored()->get();
 
-        // Summary counts
         $summary = [
             'online'      => $servers->where('status', 'Online')->count(),
             'warning'     => $servers->where('status', 'Warning')->count(),
@@ -29,22 +29,38 @@ class ServerMonitorController extends Controller
         return response()->json($server);
     }
 
-    /**
-     * POST /api/monitoring/{server}/ping
-     * Trigger manual metric refresh (simulasi — production: ganti dengan SNMP/Prometheus)
-     */
     public function ping(Request $request, ServerMonitor $server): JsonResponse
     {
-        // Simulate metric update (in production: fetch from real monitoring agent)
+        // Update metrics
         $server->update([
             'cpu_usage'       => rand(5, 95),
             'ram_usage'       => rand(20, 90),
             'last_checked_at' => now(),
         ]);
 
+        // Broadcast realtime ke semua client WebSocket
+        broadcast(new ServerMetricsUpdated($server->fresh()));
+
         return response()->json([
             'message' => "Server {$server->name} berhasil di-ping.",
             'server'  => $server->fresh(),
         ]);
+    }
+    public function store(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'name'       => 'required|string|unique:server_monitors,name',
+            'ip_address' => 'required|ip',
+            'port'       => 'required|integer|min:1|max:65535',
+            'os'         => 'required|string',
+        ]);
+
+        $server = ServerMonitor::create([
+            ...$validated,
+            'status'       => 'Online',
+            'is_monitored' => true,
+        ]);
+
+        return response()->json(['server' => $server], 201);
     }
 }
