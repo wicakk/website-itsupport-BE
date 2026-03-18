@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\UserController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\ServerMonitorController;
+use App\Http\Controllers\Api\RoleController;
 
 // ─── Public routes ─────────────────────────
 
@@ -82,6 +83,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('monitoring/{server}/ping', [ServerMonitorController::class, 'ping']);
     Route::delete('monitoring/{server}', [ServerMonitorController::class, 'destroy']);
 
+        // ── Permissions (read-only, dipakai untuk mengisi form) ──────────────
+    Route::get('/permissions', [RoleController::class, 'permissions']);
+
+    // ── CRUD Roles ────────────────────────────────────────────────────────
+    Route::apiResource('roles', RoleController::class);
 
     Route::get('notifications', function () {
         return response()->json([
