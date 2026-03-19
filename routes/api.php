@@ -83,17 +83,18 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('monitoring/{server}/ping', [ServerMonitorController::class, 'ping']);
     Route::delete('monitoring/{server}', [ServerMonitorController::class, 'destroy']);
 
-        // ── Permissions (read-only, dipakai untuk mengisi form) ──────────────
-    Route::get('/permissions', [RoleController::class, 'permissions']);
-
-    // ── CRUD Roles ────────────────────────────────────────────────────────
-    Route::apiResource('roles', RoleController::class);
+    Route::get('me/permissions', [RoleController::class, 'myPermissions']);
+    Route::get('permissions',    [RoleController::class, 'permissions']);
 
     Route::get('notifications', function () {
         return response()->json([
             'data'  => [],
             'total' => 0,
         ]);
+    });
+    Route::middleware('role:super_admin')->group(function () {
+        Route::get('roles', [RoleController::class, 'index']);
+        Route::put('roles/{role}/permissions', [RoleController::class, 'syncPermissions']);
     });
 
 });
