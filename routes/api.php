@@ -106,6 +106,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('projects/{project}/tasks/{task}',    [ProjectController::class, 'updateTask']);
     Route::delete('projects/{project}/tasks/{task}', [ProjectController::class, 'destroyTask']);
 
+    // Project attachments
+Route::post('projects/{project}/attachments', [ProjectController::class, 'uploadProjectAttachment']);
+Route::delete('projects/{project}/attachments/{attachment}', [ProjectController::class, 'deleteProjectAttachment']);
+
+    Route::post('projects/{project}/tasks/{task}/attachments',[ProjectController::class, 'uploadAttachment']);
+    Route::delete('projects/{project}/tasks/{task}/attachments/{attachment}',[ProjectController::class, 'deleteAttachment']);
+
     // Roles — hanya super_admin
     Route::middleware('role:super_admin')->group(function () {
         Route::get('roles',                        [RoleController::class, 'index']);

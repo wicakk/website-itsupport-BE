@@ -14,7 +14,7 @@ class Project extends Model
     use SoftDeletes;
 
     protected $fillable = [
-        'name', 'description', 'color', 'status',
+        'name', 'description', 'category', 'priority', 'color', 'status',
         'start_date', 'due_date', 'created_by',
     ];
 
@@ -43,5 +43,11 @@ class Project extends Model
     public function tasks(): HasMany
     {
         return $this->hasMany(Task::class);
+    }
+
+    // ← Relasi attachment project
+    public function attachments(): HasMany
+    {
+        return $this->hasMany(ProjectAttachment::class)->latest();
     }
 }

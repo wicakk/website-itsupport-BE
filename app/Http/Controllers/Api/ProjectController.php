@@ -6,14 +6,23 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Project;
 use App\Models\Task;
+use App\Models\TaskAttachment;
+use App\Models\ProjectAttachment;
 use App\Models\TaskColumn;
-use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 
 class ProjectController extends Controller
 {
-    // ── Projects ──────────────────────────────────────────────────
+    // ── Kolom Kanban default (baru) ───────────────────────────────
+    private array $defaultColumns = [
+        ['name' => 'Mulai Project',    'color' => '#94A3B8', 'position' => 0],
+        ['name' => 'Analisa',          'color' => '#6366f1', 'position' => 1],
+        ['name' => 'Develop Local',    'color' => '#F59E0B', 'position' => 2],
+        ['name' => 'Develop Staging',  'color' => '#8B5CF6', 'position' => 3],
+        ['name' => 'Prod',             'color' => '#10B981', 'position' => 4],
+    ];
 
     /** GET /api/projects */
     public function index(Request $request): JsonResponse
@@ -27,12 +36,7 @@ class ProjectController extends Controller
                   ->orWhereHas('members', fn($m) => $m->where('user_id', $user->id));
             })
             ->latest()
-            ->get()
-            ->map(fn($p) => array_merge($p->toArray(), [
-                'task_stats' => [
-                    'total' => $p->tasks_count,
-                ],
-            ]));
+            ->get();
 
         return response()->json(['success' => true, 'data' => $projects]);
     }
@@ -43,6 +47,8 @@ class ProjectController extends Controller
         $validated = $request->validate([
             'name'        => 'required|string|max:150',
             'description' => 'nullable|string',
+            'category'    => 'nullable|string|max:100',
+            'priority'    => 'nullable|in:low,medium,high,urgent',
             'color'       => 'nullable|string|max:7',
             'status'      => 'nullable|in:active,on_hold,completed,cancelled',
             'start_date'  => 'nullable|date',
@@ -58,22 +64,15 @@ class ProjectController extends Controller
             'status'     => $validated['status'] ?? 'active',
         ]);
 
-        // Default Kanban columns
-        $columns = ['To Do', 'In Progress', 'Review', 'Done'];
-        $colors  = ['#94A3B8', '#6366f1', '#F59E0B', '#10B981'];
-        foreach ($columns as $i => $name) {
-            TaskColumn::create([
-                'project_id' => $project->id,
-                'name'       => $name,
-                'color'      => $colors[$i],
-                'position'   => $i,
-            ]);
+        // Buat kolom Kanban default baru
+        foreach ($this->defaultColumns as $col) {
+            TaskColumn::create(['project_id' => $project->id, ...$col]);
         }
 
-        // Add creator as owner
+        // Creator sebagai owner
         $project->members()->attach($request->user()->id, ['role' => 'owner']);
 
-        // Add other members
+        // Tambah member lain
         if (!empty($validated['member_ids'])) {
             foreach ($validated['member_ids'] as $uid) {
                 if ($uid != $request->user()->id) {
@@ -94,16 +93,10 @@ class ProjectController extends Controller
     {
         $this->authorizeProject($request->user(), $project);
 
-        // Auto-create default columns jika belum ada (untuk project lama)
+        // Auto-create kolom baru jika project lama (kolom kosong)
         if ($project->columns()->count() === 0) {
-            $defaults = [
-                ['name' => 'To Do',       'color' => '#94A3B8', 'position' => 0],
-                ['name' => 'In Progress', 'color' => '#6366f1', 'position' => 1],
-                ['name' => 'Review',      'color' => '#F59E0B', 'position' => 2],
-                ['name' => 'Done',        'color' => '#10B981', 'position' => 3],
-            ];
-            foreach ($defaults as $col) {
-                TaskColumn::create(array_merge($col, ['project_id' => $project->id]));
+            foreach ($this->defaultColumns as $col) {
+                TaskColumn::create(['project_id' => $project->id, ...$col]);
             }
         }
 
@@ -112,6 +105,8 @@ class ProjectController extends Controller
             'members:id,name,initials,color',
             'columns.tasks.assignee:id,name,initials,color',
             'columns.tasks.creator:id,name,initials,color',
+            'columns.tasks.attachments.uploader:id,name',
+            'attachments.uploader:id,name',
         ]);
 
         return response()->json(['success' => true, 'data' => $project]);
@@ -125,6 +120,8 @@ class ProjectController extends Controller
         $validated = $request->validate([
             'name'        => 'sometimes|string|max:150',
             'description' => 'nullable|string',
+            'category'    => 'nullable|string|max:100',
+            'priority'    => 'nullable|in:low,medium,high,urgent',
             'color'       => 'nullable|string|max:7',
             'status'      => 'nullable|in:active,on_hold,completed,cancelled',
             'start_date'  => 'nullable|date',
@@ -135,7 +132,6 @@ class ProjectController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Project berhasil diupdate.',
             'data'    => $project->load(['creator:id,name,initials,color', 'members:id,name,initials,color']),
         ]);
     }
@@ -148,8 +144,6 @@ class ProjectController extends Controller
         return response()->json(['success' => true, 'message' => 'Project dihapus.']);
     }
 
-    // ── Members ───────────────────────────────────────────────────
-
     /** PUT /api/projects/{project}/members */
     public function syncMembers(Request $request, Project $project): JsonResponse
     {
@@ -160,16 +154,11 @@ class ProjectController extends Controller
             'member_ids.*' => 'exists:users,id',
         ]);
 
-        // Selalu pertahankan owner
         $ownerIds = $project->members()->wherePivot('role', 'owner')->pluck('users.id')->toArray();
         $syncData = [];
-        foreach ($ownerIds as $id) {
-            $syncData[$id] = ['role' => 'owner'];
-        }
+        foreach ($ownerIds as $id)              $syncData[$id] = ['role' => 'owner'];
         foreach ($validated['member_ids'] as $id) {
-            if (!isset($syncData[$id])) {
-                $syncData[$id] = ['role' => 'member'];
-            }
+            if (!isset($syncData[$id]))         $syncData[$id] = ['role' => 'member'];
         }
         $project->members()->sync($syncData);
 
@@ -199,15 +188,15 @@ class ProjectController extends Controller
 
         $task = Task::create([
             ...$validated,
-            'project_id'  => $project->id,
-            'created_by'  => $request->user()->id,
-            'priority'    => $validated['priority'] ?? 'medium',
-            'position'    => $maxPos + 1,
+            'project_id' => $project->id,
+            'created_by' => $request->user()->id,
+            'priority'   => $validated['priority'] ?? 'medium',
+            'position'   => $maxPos + 1,
         ]);
 
         return response()->json([
             'success' => true,
-            'data'    => $task->load(['assignee:id,name,initials,color', 'creator:id,name,initials,color']),
+            'data'    => $task->load(['assignee:id,name,initials,color', 'creator:id,name,initials,color', 'attachments']),
         ], 201);
     }
 
@@ -230,7 +219,7 @@ class ProjectController extends Controller
 
         return response()->json([
             'success' => true,
-            'data'    => $task->load(['assignee:id,name,initials,color', 'creator:id,name,initials,color']),
+            'data'    => $task->load(['assignee:id,name,initials,color', 'creator:id,name,initials,color', 'attachments']),
         ]);
     }
 
@@ -238,18 +227,24 @@ class ProjectController extends Controller
     public function destroyTask(Request $request, Project $project, Task $task): JsonResponse
     {
         $this->authorizeProject($request->user(), $project);
+
+        // Hapus file attachment dari storage
+        foreach ($task->attachments as $att) {
+            Storage::delete($att->path);
+        }
+
         $task->delete();
-        return response()->json(['success' => true, 'message' => 'Task dihapus.']);
+        return response()->json(['success' => true]);
     }
 
-    /** PUT /api/projects/{project}/tasks/reorder — drag & drop */
+    /** PUT /api/projects/{project}/tasks/reorder */
     public function reorderTasks(Request $request, Project $project): JsonResponse
     {
         $validated = $request->validate([
-            'tasks'            => 'required|array',
-            'tasks.*.id'       => 'required|exists:tasks,id',
-            'tasks.*.column_id'=> 'required|exists:task_columns,id',
-            'tasks.*.position' => 'required|integer',
+            'tasks'             => 'required|array',
+            'tasks.*.id'        => 'required|exists:tasks,id',
+            'tasks.*.column_id' => 'required|exists:task_columns,id',
+            'tasks.*.position'  => 'required|integer',
         ]);
 
         foreach ($validated['tasks'] as $t) {
@@ -262,8 +257,85 @@ class ProjectController extends Controller
         return response()->json(['success' => true]);
     }
 
-    // ── Helper ────────────────────────────────────────────────────
+    // ── Attachments ───────────────────────────────────────────────
 
+    /**
+     * POST /api/projects/{project}/tasks/{task}/attachments
+     * Upload file ke task
+     */
+    public function uploadAttachment(Request $request, Project $project, Task $task): JsonResponse
+    {
+        $this->authorizeProject($request->user(), $project);
+
+        $request->validate([
+            'file' => 'required|file|max:10240', // max 10MB
+        ]);
+
+        $file = $request->file('file');
+        $path = $file->store("task-attachments/{$task->id}", 'public');
+
+        $attachment = TaskAttachment::create([
+            'task_id'     => $task->id,
+            'uploaded_by' => $request->user()->id,
+            'filename'    => $file->getClientOriginalName(),
+            'path'        => $path,
+            'mime_type'   => $file->getMimeType(),
+            'size'        => $file->getSize(),
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'data'    => $attachment->load('uploader:id,name'),
+        ], 201);
+    }
+
+    /**
+     * DELETE /api/projects/{project}/tasks/{task}/attachments/{attachment}
+     */
+    public function deleteAttachment(Request $request, Project $project, Task $task, TaskAttachment $attachment): JsonResponse
+    {
+        $this->authorizeProject($request->user(), $project);
+
+        Storage::disk('public')->delete($attachment->path);
+        $attachment->delete();
+
+        return response()->json(['success' => true]);
+    }
+
+    // ── Project Attachments ───────────────────────────────────────
+
+    /** POST /api/projects/{project}/attachments */
+    public function uploadProjectAttachment(Request $request, Project $project): JsonResponse
+    {
+        $this->authorizeProject($request->user(), $project);
+
+        $request->validate(['file' => 'required|file|max:10240']);
+
+        $file = $request->file('file');
+        $path = $file->store("project-attachments/{$project->id}", 'public');
+
+        $att = ProjectAttachment::create([
+            'project_id'  => $project->id,
+            'uploaded_by' => $request->user()->id,
+            'filename'    => $file->getClientOriginalName(),
+            'path'        => $path,
+            'mime_type'   => $file->getMimeType(),
+            'size'        => $file->getSize(),
+        ]);
+
+        return response()->json(['success' => true, 'data' => $att->load('uploader:id,name')], 201);
+    }
+
+    /** DELETE /api/projects/{project}/attachments/{attachment} */
+    public function deleteProjectAttachment(Request $request, Project $project, ProjectAttachment $attachment): JsonResponse
+    {
+        $this->authorizeProject($request->user(), $project);
+        Storage::disk('public')->delete($attachment->path);
+        $attachment->delete();
+        return response()->json(['success' => true]);
+    }
+
+    // ── Helper ────────────────────────────────────────────────────
     private function authorizeProject($user, Project $project, string $minRole = 'member'): void
     {
         $isMember = $project->members()->where('user_id', $user->id)->exists()
@@ -275,8 +347,7 @@ class ProjectController extends Controller
 
         if ($minRole === 'owner') {
             $isOwner = $project->created_by === $user->id
-                || $project->members()->where('user_id', $user->id)
-                    ->wherePivot('role', 'owner')->exists()
+                || $project->members()->where('user_id', $user->id)->wherePivot('role', 'owner')->exists()
                 || in_array($user->role, ['super_admin', 'manager_it']);
 
             if (!$isOwner) abort(403, 'Hanya owner yang bisa melakukan ini.');

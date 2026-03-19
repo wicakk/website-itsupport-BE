@@ -14,6 +14,8 @@ return new class extends Migration
             $table->id();
             $table->string('name');
             $table->text('description')->nullable();
+            $table->string('category')->nullable();
+            $table->enum('priority', ['low','medium','high','urgent'])->default('medium');
             $table->string('color', 7)->default('#6366f1'); // hex color
             $table->enum('status', ['active', 'on_hold', 'completed', 'cancelled'])->default('active');
             $table->date('start_date')->nullable();
@@ -58,6 +60,18 @@ return new class extends Migration
             $table->timestamps();
             $table->softDeletes();
         });
+
+        // Task attachments
+        Schema::create('task_attachments', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('task_id')->constrained()->onDelete('cascade');
+            $table->foreignId('uploaded_by')->constrained('users')->onDelete('cascade');
+            $table->string('filename');
+            $table->string('path');
+            $table->string('mime_type')->nullable();
+            $table->unsignedBigInteger('size')->default(0);
+            $table->timestamps();
+        });
     }
 
     public function down(): void
@@ -66,5 +80,6 @@ return new class extends Migration
         Schema::dropIfExists('task_columns');
         Schema::dropIfExists('project_members');
         Schema::dropIfExists('projects');
+        Schema::dropIfExists('task_attachments');
     }
 };

@@ -6,6 +6,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Task extends Model
 {
@@ -17,7 +18,7 @@ class Task extends Model
     ];
 
     protected $casts = [
-        'due_date' => 'date',
+        'due_date' => 'datetime',
     ];
 
     public function project(): BelongsTo
@@ -38,5 +39,10 @@ class Task extends Model
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function attachments(): HasMany
+    {
+        return $this->hasMany(TaskAttachment::class);
     }
 }
