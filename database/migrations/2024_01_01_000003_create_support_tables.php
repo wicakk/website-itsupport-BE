@@ -86,6 +86,17 @@ return new class extends Migration
             $table->integer('port')->default(9090);
             $table->timestamps();
         });
+
+        // ─── Ticket Categories ─────────────────────────────────────────────────
+        Schema::create('ticket_categories', function (Blueprint $table) {
+            $table->id();
+            $table->string('name')->unique();
+            $table->string('color', 7)->default('#6366f1');
+            $table->text('description')->nullable();
+            $table->boolean('is_active')->default(true);
+            $table->unsignedInteger('order')->default(0);
+            $table->timestamps();
+        });
     }
 
     public function down(): void
@@ -95,5 +106,6 @@ return new class extends Migration
         Schema::dropIfExists('assets');
         Schema::dropIfExists('ticket_attachments');
         Schema::dropIfExists('ticket_comments');
+        Schema::dropIfExists('ticket_categories');
     }
 };

@@ -12,6 +12,8 @@ use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\ServerMonitorController;
 use App\Http\Controllers\Api\RoleController;
 use App\Http\Controllers\Api\ProjectController;
+use App\Http\Controllers\Api\TicketCategoryController;
+
 
 // ─── Public routes ─────────────────────────
 Route::post('login',          [AuthController::class, 'login']);
@@ -83,6 +85,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('me/permissions', [RoleController::class, 'myPermissions']);
     Route::get('permissions',    [RoleController::class, 'permissions']);
 
+    // Kategori tiket
+    Route::get('ticket-categories/active', [TicketCategoryController::class, 'active']);
+    Route::get('ticket-categories',        [TicketCategoryController::class, 'index']);
+
+    Route::post('ticket-categories',                  [TicketCategoryController::class, 'store']);
+    Route::put('ticket-categories/reorder',           [TicketCategoryController::class, 'reorder']);
+    Route::put('ticket-categories/{ticketCategory}',  [TicketCategoryController::class, 'update']);
+    Route::delete('ticket-categories/{ticketCategory}', [TicketCategoryController::class, 'destroy']);
+
     // Notifications
     Route::get('notifications', function () {
         return response()->json(['data' => [], 'total' => 0]);
@@ -107,8 +118,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('projects/{project}/tasks/{task}', [ProjectController::class, 'destroyTask']);
 
     // Project attachments
-Route::post('projects/{project}/attachments', [ProjectController::class, 'uploadProjectAttachment']);
-Route::delete('projects/{project}/attachments/{attachment}', [ProjectController::class, 'deleteProjectAttachment']);
+    Route::post('projects/{project}/attachments', [ProjectController::class, 'uploadProjectAttachment']);
+    Route::delete('projects/{project}/attachments/{attachment}', [ProjectController::class, 'deleteProjectAttachment']);
 
     Route::post('projects/{project}/tasks/{task}/attachments',[ProjectController::class, 'uploadAttachment']);
     Route::delete('projects/{project}/tasks/{task}/attachments/{attachment}',[ProjectController::class, 'deleteAttachment']);

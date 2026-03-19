@@ -13,9 +13,7 @@ return new class extends Migration
             $table->string('ticket_number')->unique(); // TKT-0001
             $table->string('title');
             $table->text('description')->nullable();
-            $table->enum('category', [
-                'Hardware','Software','Network','Email','Printer','Server','Security','Others'
-            ]);
+            $table->string('category')->nullable();
             $table->enum('priority', ['Low','Medium','High','Critical']);
             $table->enum('status', [
                 'Open','Assigned','In Progress','Waiting User','Resolved','Closed'
@@ -40,6 +38,7 @@ return new class extends Migration
             $table->index(['assigned_to', 'status']);
             $table->index('sla_deadline');
         });
+        
     }
 
     public function down(): void
