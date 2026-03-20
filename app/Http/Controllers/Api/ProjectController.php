@@ -189,7 +189,6 @@ class ProjectController extends Controller
 
     // ── Tasks ─────────────────────────────────────────────────────
 
-    /** POST /api/projects/{project}/tasks */
     public function storeTask(Request $request, Project $project): JsonResponse
     {
         $this->authorizeProject($request->user(), $project);
@@ -228,7 +227,6 @@ class ProjectController extends Controller
         ], 201);
     }
 
-    /** PUT /api/projects/{project}/tasks/{task} */
     public function updateTask(Request $request, Project $project, Task $task): JsonResponse
     {
         $this->authorizeProject($request->user(), $project);
@@ -355,10 +353,6 @@ class ProjectController extends Controller
 
     // ── Attachments ───────────────────────────────────────────────
 
-    /**
-     * POST /api/projects/{project}/tasks/{task}/attachments
-     * Upload file ke task
-     */
     public function uploadAttachment(Request $request, Project $project, Task $task): JsonResponse
     {
         $this->authorizeProject($request->user(), $project);
