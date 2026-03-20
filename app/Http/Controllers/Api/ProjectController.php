@@ -7,6 +7,8 @@ use App\Http\Controllers\Controller;
 use App\Models\Project;
 use App\Models\Task;
 use App\Models\TaskAttachment;
+use App\Models\TaskHistory;
+use App\Models\TaskComment;
 use App\Models\ProjectAttachment;
 use App\Models\TaskColumn;
 use Illuminate\Http\JsonResponse;
@@ -178,6 +180,7 @@ class ProjectController extends Controller
         $validated = $request->validate([
             'title'       => 'required|string|max:200',
             'description' => 'nullable|string',
+            'category'    => 'nullable|string|max:100',
             'column_id'   => 'required|exists:task_columns,id',
             'priority'    => 'nullable|in:low,medium,high,urgent',
             'assigned_to' => 'nullable|exists:users,id',
@@ -194,6 +197,14 @@ class ProjectController extends Controller
             'position'   => $maxPos + 1,
         ]);
 
+        TaskHistory::create([
+            'task_id'     => $task->id,
+            'user_id'     => $request->user()->id,
+            'type'        => 'created',
+            'description' => 'Task dibuat di kolom ' . ($task->column->name ?? '-'),
+            'to_value'    => $task->column->name ?? null,
+        ]);
+
         return response()->json([
             'success' => true,
             'data'    => $task->load(['assignee:id,name,initials,color', 'creator:id,name,initials,color', 'attachments']),
@@ -208,12 +219,58 @@ class ProjectController extends Controller
         $validated = $request->validate([
             'title'       => 'sometimes|string|max:200',
             'description' => 'nullable|string',
+            'category'    => 'nullable|string|max:100',
             'column_id'   => 'sometimes|exists:task_columns,id',
             'priority'    => 'nullable|in:low,medium,high,urgent',
             'assigned_to' => 'nullable|exists:users,id',
             'due_date'    => 'nullable|date',
             'position'    => 'nullable|integer',
         ]);
+
+        $userId = $request->user()->id;
+
+        // Catat history: pindah kolom
+        if (isset($validated['column_id']) && (int)$validated['column_id'] !== (int)$task->column_id) {
+            $oldCol = TaskColumn::find($task->column_id)?->name ?? '-';
+            $newCol = TaskColumn::find($validated['column_id'])?->name ?? '-';
+            TaskHistory::create([
+                'task_id'     => $task->id,
+                'user_id'     => $userId,
+                'type'        => 'column_changed',
+                'description' => "Dipindahkan dari \"{$oldCol}\" ke \"{$newCol}\"",
+                'from_value'  => $oldCol,
+                'to_value'    => $newCol,
+            ]);
+        }
+
+        // Catat history: ganti assignee
+        if (array_key_exists('assigned_to', $validated) && $validated['assigned_to'] != $task->assigned_to) {
+            $oldUser = $task->assigned_to ? (\App\Models\User::find($task->assigned_to)?->name ?? '-') : 'Tidak ada';
+            $newUser = $validated['assigned_to'] ? (\App\Models\User::find($validated['assigned_to'])?->name ?? '-') : 'Tidak ada';
+            TaskHistory::create([
+                'task_id'     => $task->id,
+                'user_id'     => $userId,
+                'type'        => 'assignee_changed',
+                'description' => "Assignee diubah: {$oldUser} → {$newUser}",
+                'from_value'  => $oldUser,
+                'to_value'    => $newUser,
+            ]);
+        }
+
+        // Catat history: ganti prioritas
+        if (isset($validated['priority']) && $validated['priority'] !== $task->priority) {
+            $labels = ['low'=>'Low','medium'=>'Medium','high'=>'High','urgent'=>'Urgent'];
+            $oldP = $labels[$task->priority] ?? $task->priority;
+            $newP = $labels[$validated['priority']] ?? $validated['priority'];
+            TaskHistory::create([
+                'task_id'     => $task->id,
+                'user_id'     => $userId,
+                'type'        => 'priority_changed',
+                'description' => "Prioritas diubah: {$oldP} → {$newP}",
+                'from_value'  => $oldP,
+                'to_value'    => $newP,
+            ]);
+        }
 
         $task->update($validated);
 
@@ -247,8 +304,30 @@ class ProjectController extends Controller
             'tasks.*.position'  => 'required|integer',
         ]);
 
+        // Cache nama kolom agar tidak query berulang
+        $columnNames = TaskColumn::whereIn('id', collect($validated['tasks'])->pluck('column_id'))
+            ->pluck('name', 'id');
+
         foreach ($validated['tasks'] as $t) {
-            Task::where('id', $t['id'])->update([
+            $task = Task::find($t['id']);
+            if (!$task) continue;
+
+            // Catat history jika kolom berubah
+            if ((int)$task->column_id !== (int)$t['column_id']) {
+                $oldCol = $columnNames[$task->column_id] ?? TaskColumn::find($task->column_id)?->name ?? '-';
+                $newCol = $columnNames[$t['column_id']] ?? '-';
+
+                TaskHistory::create([
+                    'task_id'     => $task->id,
+                    'user_id'     => $request->user()->id,
+                    'type'        => 'column_changed',
+                    'description' => "Dipindahkan dari \"{$oldCol}\" ke \"{$newCol}\"",
+                    'from_value'  => $oldCol,
+                    'to_value'    => $newCol,
+                ]);
+            }
+
+            $task->update([
                 'column_id' => $t['column_id'],
                 'position'  => $t['position'],
             ]);
@@ -352,5 +431,52 @@ class ProjectController extends Controller
 
             if (!$isOwner) abort(403, 'Hanya owner yang bisa melakukan ini.');
         }
+    }
+
+    // ── Task Tracking ─────────────────────────────────────────────
+
+    /** GET /api/projects/{project}/tasks/{task}/tracking */
+    public function taskTracking(Request $request, Project $project, Task $task): JsonResponse
+    {
+        $this->authorizeProject($request->user(), $project);
+
+        return response()->json([
+            'success'     => true,
+            'task'        => $task->load(['assignee:id,name,initials,color','creator:id,name,initials,color','column:id,name']),
+            'histories'   => TaskHistory::where('task_id', $task->id)->with('user:id,name,initials,color')->latest()->get(),
+            'comments'    => TaskComment::where('task_id', $task->id)->with('user:id,name,initials,color')->latest()->get(),
+            'attachments' => $task->attachments()->with('uploader:id,name,initials,color')->latest()->get(),
+        ]);
+    }
+
+    /** POST /api/projects/{project}/tasks/{task}/comments */
+    public function storeComment(Request $request, Project $project, Task $task): JsonResponse
+    {
+        $this->authorizeProject($request->user(), $project);
+        $validated = $request->validate(['body' => 'required|string|max:2000']);
+
+        $comment = TaskComment::create([
+            'task_id' => $task->id,
+            'user_id' => $request->user()->id,
+            'body'    => $validated['body'],
+        ]);
+
+        TaskHistory::create([
+            'task_id'     => $task->id,
+            'user_id'     => $request->user()->id,
+            'type'        => 'comment_added',
+            'description' => 'Menambahkan komentar',
+        ]);
+
+        return response()->json(['success' => true, 'data' => $comment->load('user:id,name,initials,color')], 201);
+    }
+
+    /** DELETE /api/projects/{project}/tasks/{task}/comments/{comment} */
+    public function destroyComment(Request $request, Project $project, Task $task, TaskComment $comment): JsonResponse
+    {
+        $this->authorizeProject($request->user(), $project);
+        if ($comment->user_id !== $request->user()->id) abort(403, 'Hanya pembuat komentar yang bisa menghapus.');
+        $comment->delete();
+        return response()->json(['success' => true]);
     }
 }

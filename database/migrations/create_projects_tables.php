@@ -52,6 +52,7 @@ return new class extends Migration
             $table->foreignId('column_id')->constrained('task_columns')->onDelete('cascade');
             $table->string('title');
             $table->text('description')->nullable();
+            $table->string('category')->nullable();
             $table->enum('priority', ['low', 'medium', 'high', 'urgent'])->default('medium');
             $table->foreignId('assigned_to')->nullable()->constrained('users')->onDelete('set null');
             $table->foreignId('created_by')->constrained('users')->onDelete('cascade');

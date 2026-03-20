@@ -94,6 +94,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('ticket-categories/{ticketCategory}',  [TicketCategoryController::class, 'update']);
     Route::delete('ticket-categories/{ticketCategory}', [TicketCategoryController::class, 'destroy']);
 
+    // Task Tracking & Komentar
+    Route::get('projects/{project}/tasks/{task}/tracking',                    [ProjectController::class, 'taskTracking']);
+    Route::post('projects/{project}/tasks/{task}/comments',                   [ProjectController::class, 'storeComment']);
+    Route::delete('projects/{project}/tasks/{task}/comments/{comment}',       [ProjectController::class, 'destroyComment']);
+
     // Notifications
     Route::get('notifications', function () {
         return response()->json(['data' => [], 'total' => 0]);
