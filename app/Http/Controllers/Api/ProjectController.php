@@ -31,14 +31,31 @@ class ProjectController extends Controller
     {
         $user = $request->user();
 
-        $projects = Project::with(['creator:id,name,initials,color', 'members:id,name,initials,color'])
+        $projects = Project::with(['creator:id,name,initials,color', 'members:id,name,initials,color', 'attachments'])
             ->withCount('tasks')
             ->where(function ($q) use ($user) {
                 $q->where('created_by', $user->id)
                   ->orWhereHas('members', fn($m) => $m->where('user_id', $user->id));
             })
             ->latest()
-            ->get();
+            ->get()
+            ->map(function ($project) {
+                $totalTasks = $project->tasks()->count();
+
+                // Hitung task di kolom "Prod" (kolom terakhir = selesai)
+                $prodColumn = $project->columns()->where('name', 'Prod')->first();
+                $completedTasks = $prodColumn
+                    ? $project->tasks()->where('column_id', $prodColumn->id)->count()
+                    : 0;
+
+                $project->task_stats = [
+                    'total'     => $totalTasks,
+                    'completed' => $completedTasks,
+                    'progress'  => $totalTasks > 0 ? round(($completedTasks / $totalTasks) * 100) : 0,
+                ];
+
+                return $project;
+            });
 
         return response()->json(['success' => true, 'data' => $projects]);
     }
