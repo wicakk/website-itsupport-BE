@@ -48,22 +48,45 @@ class TicketController extends Controller
     public function store(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'title'       => 'required|string|max:255',
-            'description' => 'nullable|string',
-            'category'    => ['required', Rule::in(['Hardware','Software','Network','Email','Printer','Server','Security','Others'])],
-            'priority'    => ['required', Rule::in(['Low','Medium','High','Critical'])],
-            'department'  => 'nullable|string|max:100',
+            'title'           => 'required|string|max:255',
+            'description'     => 'nullable|string',
+            'category'        => ['required', Rule::in(['Hardware','Software','Network','Email','Printer','Server','Security','Others'])],
+            'priority'        => ['required', Rule::in(['Low','Medium','High','Critical'])],
+            'department'      => 'nullable|string|max:100',
+            'attachments'     => 'nullable|array|max:5',
+            'attachments.*'   => 'file|max:10240|mimes:jpg,jpeg,png,pdf,doc,docx,xls,xlsx,zip',
         ]);
 
         $ticket = Ticket::create([
-            ...$data,
+            'title'        => $data['title'],
+            'description'  => $data['description'] ?? null,
+            'category'     => $data['category'],
+            'priority'     => $data['priority'],
+            'department'   => $data['department'] ?? null,
             'requester_id' => $request->user()->id,
             'status'       => 'Open',
         ]);
 
+        // Handle attachments jika ada
+        if ($request->hasFile('attachments')) {
+            foreach ($request->file('attachments') as $file) {
+                $filename = uniqid() . '_' . time() . '.' . $file->getClientOriginalExtension();
+                $path     = $file->storeAs("tickets/{$ticket->id}", $filename, 'public');
+
+                $ticket->attachments()->create([
+                    'user_id'       => $request->user()->id,
+                    'filename'      => $filename,
+                    'original_name' => $file->getClientOriginalName(),
+                    'mime_type'     => $file->getMimeType(),
+                    'file_size'     => $file->getSize(),
+                    'path'          => $path,
+                ]);
+            }
+        }
+
         return response()->json([
             'message' => 'Tiket berhasil dibuat.',
-            'ticket'  => $ticket->load(['requester:id,name,initials,color']),
+            'ticket'  => $ticket->load(['requester:id,name,initials,color', 'attachments']),
         ], 201);
     }
 
