@@ -46,7 +46,7 @@ class Ticket extends Model
         static::updating(function (Ticket $ticket) {
             if ($ticket->isDirty('status') && $ticket->status === 'Resolved') {
                 $ticket->resolved_at = now();
-                $ticket->resolution_time_minutes = $ticket->created_at->diffInMinutes(now());
+                $ticket->resolution_time_minutes = (int) $ticket->created_at->diffInMinutes(now());
                 if ($ticket->sla_deadline && now()->gt($ticket->sla_deadline)) {
                     $ticket->sla_breached = true;
                 }

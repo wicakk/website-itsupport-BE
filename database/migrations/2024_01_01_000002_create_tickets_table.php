@@ -26,7 +26,7 @@ return new class extends Migration
             $table->timestamp('sla_deadline')->nullable();
             $table->timestamp('resolved_at')->nullable();
             $table->timestamp('closed_at')->nullable();
-            $table->integer('resolution_time_minutes')->nullable();
+            $table->decimal('resolution_time_minutes', 8, 2)->nullable();
             $table->boolean('sla_breached')->default(false);
             $table->text('resolution_notes')->nullable();
             $table->unsignedTinyInteger('satisfaction_rating')->nullable(); // 1-5

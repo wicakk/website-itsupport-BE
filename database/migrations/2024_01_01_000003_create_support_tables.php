@@ -23,6 +23,7 @@ return new class extends Migration
         Schema::create('ticket_attachments', function (Blueprint $table) {
             $table->id();
             $table->foreignId('ticket_id')->constrained()->cascadeOnDelete();
+            $table->foreignId('comment_id')->nullable()->constrained('ticket_comments')->nullOnDelete();
             $table->foreignId('user_id')->constrained()->cascadeOnDelete();
             $table->string('filename');
             $table->string('original_name');
@@ -107,5 +108,9 @@ return new class extends Migration
         Schema::dropIfExists('ticket_attachments');
         Schema::dropIfExists('ticket_comments');
         Schema::dropIfExists('ticket_categories');
+        Schema::table('ticket_attachments', function (Blueprint $table) {
+            $table->dropForeign(['comment_id']);
+            $table->dropColumn('comment_id');
+        });
     }
 };
