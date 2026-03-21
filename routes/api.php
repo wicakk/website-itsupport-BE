@@ -13,6 +13,7 @@ use App\Http\Controllers\Api\ServerMonitorController;
 use App\Http\Controllers\Api\RoleController;
 use App\Http\Controllers\Api\ProjectController;
 use App\Http\Controllers\Api\TicketCategoryController;
+use App\Http\Controllers\Api\MasterLocationController;
 
 
 // ─── Public routes ─────────────────────────
@@ -42,9 +43,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('tickets/{ticket}/rate',    [TicketController::class, 'rate']);
 
     // Comments
-    Route::get('tickets/{ticket}/comments',                    [TicketCommentController::class, 'index']);
-    Route::post('tickets/{ticket}/comments',                   [TicketCommentController::class, 'store']);
-    Route::delete('tickets/{ticket}/comments/{comment}',       [TicketCommentController::class, 'destroy']);
+    Route::get('tickets/{ticket}/comments',              [TicketCommentController::class, 'index']);
+    Route::post('tickets/{ticket}/comments',             [TicketCommentController::class, 'store']);
+    Route::delete('tickets/{ticket}/comments/{comment}', [TicketCommentController::class, 'destroy']);
 
     // Attachments
     Route::post('tickets/{ticket}/attachments', [TicketController::class, 'uploadAttachment']);
@@ -75,34 +76,43 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('reports/export',      [ReportController::class, 'export']);
 
     // Server Monitoring
-    Route::get('monitoring',                  [ServerMonitorController::class, 'index']);
-    Route::get('monitoring/{server}',         [ServerMonitorController::class, 'show']);
-    Route::post('monitoring',                 [ServerMonitorController::class, 'store']);
-    Route::post('monitoring/{server}/ping',   [ServerMonitorController::class, 'ping']);
-    Route::delete('monitoring/{server}',      [ServerMonitorController::class, 'destroy']);
+    Route::get('monitoring',                [ServerMonitorController::class, 'index']);
+    Route::get('monitoring/{server}',       [ServerMonitorController::class, 'show']);
+    Route::post('monitoring',               [ServerMonitorController::class, 'store']);
+    Route::post('monitoring/{server}/ping', [ServerMonitorController::class, 'ping']);
+    Route::delete('monitoring/{server}',    [ServerMonitorController::class, 'destroy']);
 
-    // Permissions (my permissions + all permissions list)
+    // Permissions
     Route::get('me/permissions', [RoleController::class, 'myPermissions']);
     Route::get('permissions',    [RoleController::class, 'permissions']);
 
     // Kategori tiket
-    Route::get('ticket-categories/active', [TicketCategoryController::class, 'active']);
-    Route::get('ticket-categories',        [TicketCategoryController::class, 'index']);
-
-    Route::post('ticket-categories',                  [TicketCategoryController::class, 'store']);
-    Route::put('ticket-categories/reorder',           [TicketCategoryController::class, 'reorder']);
-    Route::put('ticket-categories/{ticketCategory}',  [TicketCategoryController::class, 'update']);
+    Route::get('ticket-categories/active',              [TicketCategoryController::class, 'active']);
+    Route::get('ticket-categories',                     [TicketCategoryController::class, 'index']);
+    Route::post('ticket-categories',                    [TicketCategoryController::class, 'store']);
+    Route::put('ticket-categories/reorder',             [TicketCategoryController::class, 'reorder']);
+    Route::put('ticket-categories/{ticketCategory}',    [TicketCategoryController::class, 'update']);
     Route::delete('ticket-categories/{ticketCategory}', [TicketCategoryController::class, 'destroy']);
 
     // Task Tracking & Komentar
-    Route::get('projects/{project}/tasks/{task}/tracking',                    [ProjectController::class, 'taskTracking']);
-    Route::post('projects/{project}/tasks/{task}/comments',                   [ProjectController::class, 'storeComment']);
-    Route::delete('projects/{project}/tasks/{task}/comments/{comment}',       [ProjectController::class, 'destroyComment']);
+    Route::get('projects/{project}/tasks/{task}/tracking',              [ProjectController::class, 'taskTracking']);
+    Route::post('projects/{project}/tasks/{task}/comments',             [ProjectController::class, 'storeComment']);
+    Route::delete('projects/{project}/tasks/{task}/comments/{comment}', [ProjectController::class, 'destroyComment']);
+
+    // ── [FIX] Master Locations — ganti GET saja jadi apiResource lengkap ──
+    Route::apiResource('master/locations', MasterLocationController::class)
+         ->parameters(['locations' => 'location']);
+    // Menghasilkan:
+    //   GET    /api/master/locations           → index
+    //   POST   /api/master/locations           → store
+    //   GET    /api/master/locations/{location}→ show
+    //   PUT    /api/master/locations/{location}→ update
+    //   DELETE /api/master/locations/{location}→ destroy
 
     // Notifications
     Route::get('notifications', function () {
         return response()->json(['data' => [], 'total' => 0]);
-    }); // ← penutup ini yang hilang sebelumnya
+    });
 
     // Projects — semua member bisa lihat
     Route::get('projects',           [ProjectController::class, 'index']);
@@ -116,23 +126,22 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('projects/{project}/members', [ProjectController::class, 'syncMembers']);
     });
 
-    // Tasks — semua member project bisa
+    // Tasks
     Route::post('projects/{project}/tasks',          [ProjectController::class, 'storeTask']);
     Route::put('projects/{project}/tasks/reorder',   [ProjectController::class, 'reorderTasks']);
     Route::put('projects/{project}/tasks/{task}',    [ProjectController::class, 'updateTask']);
     Route::delete('projects/{project}/tasks/{task}', [ProjectController::class, 'destroyTask']);
 
     // Project attachments
-    Route::post('projects/{project}/attachments', [ProjectController::class, 'uploadProjectAttachment']);
-    Route::delete('projects/{project}/attachments/{attachment}', [ProjectController::class, 'deleteProjectAttachment']);
-
-    Route::post('projects/{project}/tasks/{task}/attachments',[ProjectController::class, 'uploadAttachment']);
-    Route::delete('projects/{project}/tasks/{task}/attachments/{attachment}',[ProjectController::class, 'deleteAttachment']);
+    Route::post('projects/{project}/attachments',                        [ProjectController::class, 'uploadProjectAttachment']);
+    Route::delete('projects/{project}/attachments/{attachment}',         [ProjectController::class, 'deleteProjectAttachment']);
+    Route::post('projects/{project}/tasks/{task}/attachments',           [ProjectController::class, 'uploadAttachment']);
+    Route::delete('projects/{project}/tasks/{task}/attachments/{attachment}', [ProjectController::class, 'deleteAttachment']);
 
     // Roles — hanya super_admin
     Route::middleware('role:super_admin')->group(function () {
-        Route::get('roles',                        [RoleController::class, 'index']);
-        Route::put('roles/{role}/permissions',     [RoleController::class, 'syncPermissions']);
+        Route::get('roles',                    [RoleController::class, 'index']);
+        Route::put('roles/{role}/permissions', [RoleController::class, 'syncPermissions']);
     });
 
 });
