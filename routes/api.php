@@ -14,6 +14,7 @@ use App\Http\Controllers\Api\RoleController;
 use App\Http\Controllers\Api\ProjectController;
 use App\Http\Controllers\Api\TicketCategoryController;
 use App\Http\Controllers\Api\MasterLocationController;
+use App\Http\Controllers\Api\MasterAssetCategoryController;
 
 
 // ─── Public routes ─────────────────────────
@@ -99,15 +100,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('projects/{project}/tasks/{task}/comments',             [ProjectController::class, 'storeComment']);
     Route::delete('projects/{project}/tasks/{task}/comments/{comment}', [ProjectController::class, 'destroyComment']);
 
-    // ── [FIX] Master Locations — ganti GET saja jadi apiResource lengkap ──
+    // ── Master Locations
     Route::apiResource('master/locations', MasterLocationController::class)
          ->parameters(['locations' => 'location']);
-    // Menghasilkan:
-    //   GET    /api/master/locations           → index
-    //   POST   /api/master/locations           → store
-    //   GET    /api/master/locations/{location}→ show
-    //   PUT    /api/master/locations/{location}→ update
-    //   DELETE /api/master/locations/{location}→ destroy
+
+    // ── Master Asset Categories
+    Route::apiResource('master/asset-categories', MasterAssetCategoryController::class)
+         ->parameters(['asset-categories' => 'assetCategory']);
 
     // Notifications
     Route::get('notifications', function () {
