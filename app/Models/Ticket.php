@@ -86,4 +86,9 @@ class Ticket extends Model
         if ($this->sla_deadline && now()->addHour()->gt($this->sla_deadline)) return 'At Risk';
         return 'On Track';
     }
+
+    public function hardwareAsset() 
+    { 
+        return $this->hasOne(TicketHardwareAsset::class); 
+    }
 }
