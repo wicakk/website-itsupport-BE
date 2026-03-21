@@ -31,8 +31,13 @@ class ProjectController extends Controller
     {
         $user = $request->user();
 
-        $projects = Project::with(['creator:id,name,initials,color', 'members:id,name,initials,color', 'attachments'])
-            ->withCount('tasks')
+        $projects = Project::with([
+                'creator:id,name,initials,color',
+                'members:id,name,initials,color',
+                'attachments',
+                // ── Load kolom beserta jumlah task per kolom ──
+                'columns' => fn($q) => $q->withCount('tasks')->orderBy('position'),
+            ])
             ->where(function ($q) use ($user) {
                 $q->where('created_by', $user->id)
                   ->orWhereHas('members', fn($m) => $m->where('user_id', $user->id));
@@ -40,18 +45,43 @@ class ProjectController extends Controller
             ->latest()
             ->get()
             ->map(function ($project) {
-                $totalTasks = $project->tasks()->count();
+                $columns      = $project->columns; // sudah include tasks_count
+                $totalColumns = $columns->count();
+                $totalTasks   = 0;
+                $weightedScore = 0.0;
 
-                // Hitung task di kolom "Prod" (kolom terakhir = selesai)
-                $prodColumn = $project->columns()->where('name', 'Prod')->first();
-                $completedTasks = $prodColumn
-                    ? $project->tasks()->where('column_id', $prodColumn->id)->count()
+                foreach ($columns as $index => $column) {
+                    $count = $column->tasks_count ?? 0;
+                    if ($count === 0) continue;
+
+                    $totalTasks += $count;
+
+                    // Bobot: kolom pertama = 0%, kolom terakhir = 100%
+                    // Contoh 5 kolom:
+                    //   index 0 (Mulai Project)  →   0%
+                    //   index 1 (Analisa)         →  25%
+                    //   index 2 (Develop Local)   →  50%
+                    //   index 3 (Develop Staging) →  75%
+                    //   index 4 (Prod)            → 100%
+                    $weight = $totalColumns > 1
+                        ? ($index / ($totalColumns - 1)) * 100
+                        : 100.0;
+
+                    $weightedScore += $count * $weight;
+                }
+
+                // Task di kolom terakhir = "completed"
+                $lastColumn = $columns->last();
+                $completed  = $lastColumn ? ($lastColumn->tasks_count ?? 0) : 0;
+
+                $progress = $totalTasks > 0
+                    ? (int) round($weightedScore / $totalTasks)
                     : 0;
 
                 $project->task_stats = [
                     'total'     => $totalTasks,
-                    'completed' => $completedTasks,
-                    'progress'  => $totalTasks > 0 ? round(($completedTasks / $totalTasks) * 100) : 0,
+                    'completed' => $completed,
+                    'progress'  => min(100, max(0, $progress)),
                 ];
 
                 return $project;
@@ -244,7 +274,6 @@ class ProjectController extends Controller
 
         $userId = $request->user()->id;
 
-        // Catat history: pindah kolom
         if (isset($validated['column_id']) && (int)$validated['column_id'] !== (int)$task->column_id) {
             $oldCol = TaskColumn::find($task->column_id)?->name ?? '-';
             $newCol = TaskColumn::find($validated['column_id'])?->name ?? '-';
@@ -258,7 +287,6 @@ class ProjectController extends Controller
             ]);
         }
 
-        // Catat history: ganti assignee
         if (array_key_exists('assigned_to', $validated) && $validated['assigned_to'] != $task->assigned_to) {
             $oldUser = $task->assigned_to ? (\App\Models\User::find($task->assigned_to)?->name ?? '-') : 'Tidak ada';
             $newUser = $validated['assigned_to'] ? (\App\Models\User::find($validated['assigned_to'])?->name ?? '-') : 'Tidak ada';
@@ -272,7 +300,6 @@ class ProjectController extends Controller
             ]);
         }
 
-        // Catat history: ganti prioritas
         if (isset($validated['priority']) && $validated['priority'] !== $task->priority) {
             $labels = ['low'=>'Low','medium'=>'Medium','high'=>'High','urgent'=>'Urgent'];
             $oldP = $labels[$task->priority] ?? $task->priority;
@@ -300,7 +327,6 @@ class ProjectController extends Controller
     {
         $this->authorizeProject($request->user(), $project);
 
-        // Hapus file attachment dari storage
         foreach ($task->attachments as $att) {
             Storage::delete($att->path);
         }
@@ -319,7 +345,6 @@ class ProjectController extends Controller
             'tasks.*.position'  => 'required|integer',
         ]);
 
-        // Cache nama kolom agar tidak query berulang
         $columnNames = TaskColumn::whereIn('id', collect($validated['tasks'])->pluck('column_id'))
             ->pluck('name', 'id');
 
@@ -327,7 +352,6 @@ class ProjectController extends Controller
             $task = Task::find($t['id']);
             if (!$task) continue;
 
-            // Catat history jika kolom berubah
             if ((int)$task->column_id !== (int)$t['column_id']) {
                 $oldCol = $columnNames[$task->column_id] ?? TaskColumn::find($task->column_id)?->name ?? '-';
                 $newCol = $columnNames[$t['column_id']] ?? '-';
@@ -356,10 +380,7 @@ class ProjectController extends Controller
     public function uploadAttachment(Request $request, Project $project, Task $task): JsonResponse
     {
         $this->authorizeProject($request->user(), $project);
-
-        $request->validate([
-            'file' => 'required|file|max:10240', // max 10MB
-        ]);
+        $request->validate(['file' => 'required|file|max:10240']);
 
         $file = $request->file('file');
         $path = $file->store("task-attachments/{$task->id}", 'public');
@@ -373,32 +394,22 @@ class ProjectController extends Controller
             'size'        => $file->getSize(),
         ]);
 
-        return response()->json([
-            'success' => true,
-            'data'    => $attachment->load('uploader:id,name'),
-        ], 201);
+        return response()->json(['success' => true, 'data' => $attachment->load('uploader:id,name')], 201);
     }
 
-    /**
-     * DELETE /api/projects/{project}/tasks/{task}/attachments/{attachment}
-     */
     public function deleteAttachment(Request $request, Project $project, Task $task, TaskAttachment $attachment): JsonResponse
     {
         $this->authorizeProject($request->user(), $project);
-
         Storage::disk('public')->delete($attachment->path);
         $attachment->delete();
-
         return response()->json(['success' => true]);
     }
 
     // ── Project Attachments ───────────────────────────────────────
 
-    /** POST /api/projects/{project}/attachments */
     public function uploadProjectAttachment(Request $request, Project $project): JsonResponse
     {
         $this->authorizeProject($request->user(), $project);
-
         $request->validate(['file' => 'required|file|max:10240']);
 
         $file = $request->file('file');
@@ -416,7 +427,6 @@ class ProjectController extends Controller
         return response()->json(['success' => true, 'data' => $att->load('uploader:id,name')], 201);
     }
 
-    /** DELETE /api/projects/{project}/attachments/{attachment} */
     public function deleteProjectAttachment(Request $request, Project $project, ProjectAttachment $attachment): JsonResponse
     {
         $this->authorizeProject($request->user(), $project);
@@ -446,7 +456,6 @@ class ProjectController extends Controller
 
     // ── Task Tracking ─────────────────────────────────────────────
 
-    /** GET /api/projects/{project}/tasks/{task}/tracking */
     public function taskTracking(Request $request, Project $project, Task $task): JsonResponse
     {
         $this->authorizeProject($request->user(), $project);
@@ -460,7 +469,6 @@ class ProjectController extends Controller
         ]);
     }
 
-    /** POST /api/projects/{project}/tasks/{task}/comments */
     public function storeComment(Request $request, Project $project, Task $task): JsonResponse
     {
         $this->authorizeProject($request->user(), $project);
@@ -482,7 +490,6 @@ class ProjectController extends Controller
         return response()->json(['success' => true, 'data' => $comment->load('user:id,name,initials,color')], 201);
     }
 
-    /** DELETE /api/projects/{project}/tasks/{task}/comments/{comment} */
     public function destroyComment(Request $request, Project $project, Task $task, TaskComment $comment): JsonResponse
     {
         $this->authorizeProject($request->user(), $project);
