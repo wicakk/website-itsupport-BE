@@ -23,7 +23,8 @@ class ProjectController extends Controller
         ['name' => 'Analisa',          'color' => '#6366f1', 'position' => 1],
         ['name' => 'Develop Local',    'color' => '#F59E0B', 'position' => 2],
         ['name' => 'Develop Staging',  'color' => '#8B5CF6', 'position' => 3],
-        ['name' => 'Prod',             'color' => '#10B981', 'position' => 4],
+        ['name' => 'UAT',              'color' => '#06B6D4', 'position' => 4], // ← TAMBAH
+        ['name' => 'Prod',             'color' => '#10B981', 'position' => 5],
     ];
 
     /** GET /api/projects */
@@ -83,6 +84,16 @@ class ProjectController extends Controller
                     'completed' => $completed,
                     'progress'  => min(100, max(0, $progress)),
                 ];
+
+                // Sertakan columns (name, color, tasks_count) untuk tampilan breakdown
+                // columns sudah di-load dengan withCount('tasks') di atas
+                $project->setRelation('columns', $columns->map(fn($col) => [
+                    'id'          => $col->id,
+                    'name'        => $col->name,
+                    'color'       => $col->color,
+                    'position'    => $col->position,
+                    'tasks_count' => $col->tasks_count ?? 0,
+                ]));
 
                 return $project;
             });
@@ -153,6 +164,7 @@ class ProjectController extends Controller
             'creator:id,name,initials,color',
             'members:id,name,initials,color',
             'columns.tasks.assignee:id,name,initials,color',
+            'columns.tasks.assignees',   // ← multi-assignee
             'columns.tasks.creator:id,name,initials,color',
             'columns.tasks.attachments.uploader:id,name',
             'attachments.uploader:id,name',
@@ -224,24 +236,43 @@ class ProjectController extends Controller
         $this->authorizeProject($request->user(), $project);
 
         $validated = $request->validate([
-            'title'       => 'required|string|max:200',
-            'description' => 'nullable|string',
-            'category'    => 'nullable|string|max:100',
-            'column_id'   => 'required|exists:task_columns,id',
-            'priority'    => 'nullable|in:low,medium,high,urgent',
-            'assigned_to' => 'nullable|exists:users,id',
-            'due_date'    => 'nullable|date',
+            'title'        => 'required|string|max:200',
+            'description'  => 'nullable|string',
+            'category'     => 'nullable|string|max:100',
+            'column_id'    => 'required|exists:task_columns,id',
+            'priority'     => 'nullable|in:low,medium,high,urgent',
+            'assigned_to'  => 'nullable|exists:users,id',
+            'assignee_ids' => 'nullable|array',
+            'assignee_ids.*'=> 'exists:users,id',
+            'due_date'     => 'nullable|date',
         ]);
+
+        // Jika assignee_ids dikirim, pakai index pertama sebagai assigned_to
+        if (!empty($validated['assignee_ids'])) {
+            $validated['assigned_to'] = $validated['assignee_ids'][0];
+        }
 
         $maxPos = Task::where('column_id', $validated['column_id'])->max('position') ?? -1;
 
         $task = Task::create([
-            ...$validated,
-            'project_id' => $project->id,
-            'created_by' => $request->user()->id,
-            'priority'   => $validated['priority'] ?? 'medium',
-            'position'   => $maxPos + 1,
+            'title'       => $validated['title'],
+            'description' => $validated['description'] ?? null,
+            'category'    => $validated['category'] ?? null,
+            'column_id'   => $validated['column_id'],
+            'priority'    => $validated['priority'] ?? 'medium',
+            'assigned_to' => $validated['assigned_to'] ?? null,
+            'due_date'    => $validated['due_date'] ?? null,
+            'project_id'  => $project->id,
+            'created_by'  => $request->user()->id,
+            'position'    => $maxPos + 1,
         ]);
+
+        // Sync multi-assignee ke task_assignees
+        if (!empty($validated['assignee_ids'])) {
+            $task->assignees()->sync($validated['assignee_ids']);
+        } elseif (!empty($validated['assigned_to'])) {
+            $task->assignees()->sync([$validated['assigned_to']]);
+        }
 
         TaskHistory::create([
             'task_id'     => $task->id,
@@ -253,7 +284,7 @@ class ProjectController extends Controller
 
         return response()->json([
             'success' => true,
-            'data'    => $task->load(['assignee:id,name,initials,color', 'creator:id,name,initials,color', 'attachments']),
+            'data'    => $task->load(['assignee:id,name,initials,color', 'assignees', 'creator:id,name,initials,color', 'attachments']),
         ], 201);
     }
 
@@ -262,15 +293,26 @@ class ProjectController extends Controller
         $this->authorizeProject($request->user(), $project);
 
         $validated = $request->validate([
-            'title'       => 'sometimes|string|max:200',
-            'description' => 'nullable|string',
-            'category'    => 'nullable|string|max:100',
-            'column_id'   => 'sometimes|exists:task_columns,id',
-            'priority'    => 'nullable|in:low,medium,high,urgent',
-            'assigned_to' => 'nullable|exists:users,id',
-            'due_date'    => 'nullable|date',
-            'position'    => 'nullable|integer',
+            'title'        => 'sometimes|string|max:200',
+            'description'  => 'nullable|string',
+            'category'     => 'nullable|string|max:100',
+            'column_id'    => 'sometimes|exists:task_columns,id',
+            'priority'     => 'nullable|in:low,medium,high,urgent',
+            'assigned_to'  => 'nullable|exists:users,id',
+            'assignee_ids' => 'nullable|array',
+            'assignee_ids.*'=> 'exists:users,id',
+            'due_date'     => 'nullable|date',
+            'position'     => 'nullable|integer',
         ]);
+
+        // Sync multi-assignee
+        if (!empty($validated['assignee_ids'])) {
+            $validated['assigned_to'] = $validated['assignee_ids'][0];
+            $task->assignees()->sync($validated['assignee_ids']);
+        } elseif (array_key_exists('assigned_to', $validated)) {
+            $assignTo = $validated['assigned_to'] ? [$validated['assigned_to']] : [];
+            $task->assignees()->sync($assignTo);
+        }
 
         $userId = $request->user()->id;
 
@@ -318,7 +360,7 @@ class ProjectController extends Controller
 
         return response()->json([
             'success' => true,
-            'data'    => $task->load(['assignee:id,name,initials,color', 'creator:id,name,initials,color', 'attachments']),
+            'data'    => $task->load(['assignee:id,name,initials,color', 'assignees', 'creator:id,name,initials,color', 'attachments']),
         ]);
     }
 
@@ -462,7 +504,7 @@ class ProjectController extends Controller
 
         return response()->json([
             'success'     => true,
-            'task'        => $task->load(['assignee:id,name,initials,color','creator:id,name,initials,color','column:id,name']),
+            'task'        => $task->load(['assignee:id,name,initials,color','assignees','creator:id,name,initials,color','column:id,name']),
             'histories'   => TaskHistory::where('task_id', $task->id)->with('user:id,name,initials,color')->latest()->get(),
             'comments'    => TaskComment::where('task_id', $task->id)->with('user:id,name,initials,color')->latest()->get(),
             'attachments' => $task->attachments()->with('uploader:id,name,initials,color')->latest()->get(),
