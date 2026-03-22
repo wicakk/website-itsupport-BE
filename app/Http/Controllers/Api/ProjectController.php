@@ -312,41 +312,55 @@ class ProjectController extends Controller
             'position'     => 'nullable|integer',
         ]);
 
-        // Sync multi-assignee
-        if (!empty($validated['assignee_ids'])) {
-            $validated['assigned_to'] = $validated['assignee_ids'][0];
-            $task->assignees()->sync($validated['assignee_ids']);
-        } elseif (array_key_exists('assigned_to', $validated)) {
-            $assignTo = $validated['assigned_to'] ? [$validated['assigned_to']] : [];
-            $task->assignees()->sync($assignTo);
-        }
-
         $userId = $request->user()->id;
 
+        // 1. Ambil data LAMA sebelum sync
+        $oldAssigneeIds = $task->assignees()->pluck('users.id')->toArray();
+        $oldNames       = $task->assignees()->pluck('users.name')->implode(', ') ?: 'Tidak ada';
+
+        // 2. Catat column_changed + assignee aktif saat pindah
         if (isset($validated['column_id']) && (int)$validated['column_id'] !== (int)$task->column_id) {
-            $oldCol = TaskColumn::find($task->column_id)?->name ?? '-';
-            $newCol = TaskColumn::find($validated['column_id'])?->name ?? '-';
+            $oldCol      = TaskColumn::find($task->column_id)?->name ?? '-';
+            $newCol      = TaskColumn::find($validated['column_id'])?->name ?? '-';
+            $activeNames = \App\Models\User::whereIn('id',
+                $validated['assignee_ids'] ?? $oldAssigneeIds
+            )->pluck('name')->implode(', ') ?: 'Tidak ada';
             TaskHistory::create([
                 'task_id'     => $task->id,
                 'user_id'     => $userId,
                 'type'        => 'column_changed',
-                'description' => "Dipindahkan dari \"{$oldCol}\" ke \"{$newCol}\"",
+                'description' => "Dipindahkan dari \"{$oldCol}\" ke \"{$newCol}\" | Assignee: {$activeNames}",
                 'from_value'  => $oldCol,
                 'to_value'    => $newCol,
             ]);
         }
 
-        if (array_key_exists('assigned_to', $validated) && $validated['assigned_to'] != $task->assigned_to) {
-            $oldUser = $task->assigned_to ? (\App\Models\User::find($task->assigned_to)?->name ?? '-') : 'Tidak ada';
-            $newUser = $validated['assigned_to'] ? (\App\Models\User::find($validated['assigned_to'])?->name ?? '-') : 'Tidak ada';
-            TaskHistory::create([
-                'task_id'     => $task->id,
-                'user_id'     => $userId,
-                'type'        => 'assignee_changed',
-                'description' => "Assignee diubah: {$oldUser} → {$newUser}",
-                'from_value'  => $oldUser,
-                'to_value'    => $newUser,
-            ]);
+        // 3. Sync multi-assignee
+        $newAssigneeIds = null;
+        if (!empty($validated['assignee_ids'])) {
+            $newAssigneeIds = $validated['assignee_ids'];
+            $validated['assigned_to'] = $validated['assignee_ids'][0];
+            $task->assignees()->sync($validated['assignee_ids']);
+        } elseif (array_key_exists('assigned_to', $validated)) {
+            $newAssigneeIds = $validated['assigned_to'] ? [$validated['assigned_to']] : [];
+            $task->assignees()->sync($newAssigneeIds);
+        }
+
+        // 4. Catat assignee_changed jika berubah
+        if ($newAssigneeIds !== null) {
+            $sortedOld = $oldAssigneeIds; sort($sortedOld);
+            $sortedNew = $newAssigneeIds; sort($sortedNew);
+            if ($sortedNew !== $sortedOld) {
+                $newNames = \App\Models\User::whereIn('id', $newAssigneeIds)->pluck('name')->implode(', ') ?: 'Tidak ada';
+                TaskHistory::create([
+                    'task_id'     => $task->id,
+                    'user_id'     => $userId,
+                    'type'        => 'assignee_changed',
+                    'description' => "Assignee: {$newNames}",
+                    'from_value'  => $oldNames,
+                    'to_value'    => $newNames,
+                ]);
+            }
         }
 
         if (isset($validated['priority']) && $validated['priority'] !== $task->priority) {
