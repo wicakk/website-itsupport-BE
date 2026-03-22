@@ -23,8 +23,9 @@ class ProjectController extends Controller
         ['name' => 'Analisa',          'color' => '#6366f1', 'position' => 1],
         ['name' => 'Develop Local',    'color' => '#F59E0B', 'position' => 2],
         ['name' => 'Develop Staging',  'color' => '#8B5CF6', 'position' => 3],
-        ['name' => 'UAT',              'color' => '#06B6D4', 'position' => 4], // ← TAMBAH
+        ['name' => 'UAT',              'color' => '#06B6D4', 'position' => 4],
         ['name' => 'Prod',             'color' => '#10B981', 'position' => 5],
+        ['name' => 'Revisi',           'color' => '#F97316', 'position' => 6],
     ];
 
     /** GET /api/projects */
@@ -164,11 +165,17 @@ class ProjectController extends Controller
             'creator:id,name,initials,color',
             'members:id,name,initials,color',
             'columns.tasks.assignee:id,name,initials,color',
-            'columns.tasks.assignees',   // ← multi-assignee
+            'columns.tasks.assignees',
             'columns.tasks.creator:id,name,initials,color',
             'columns.tasks.attachments.uploader:id,name',
             'attachments.uploader:id,name',
         ]);
+
+        // Urutkan kolom: Revisi selalu paling akhir, sisanya by position
+        $sorted = $project->columns->sortBy(function ($col) {
+            return $col->name === 'Revisi' ? 9999 : $col->position;
+        })->values();
+        $project->setRelation('columns', $sorted);
 
         return response()->json(['success' => true, 'data' => $project]);
     }
