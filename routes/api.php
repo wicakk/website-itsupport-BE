@@ -15,6 +15,7 @@ use App\Http\Controllers\Api\ProjectController;
 use App\Http\Controllers\Api\TicketCategoryController;
 use App\Http\Controllers\Api\MasterLocationController;
 use App\Http\Controllers\Api\MasterAssetCategoryController;
+use App\Http\Controllers\Api\ProfileController;
 
 
 // ─── Public routes ─────────────────────────
@@ -124,6 +125,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('projects/{project}',      [ProjectController::class, 'destroy']);
         Route::put('projects/{project}/members', [ProjectController::class, 'syncMembers']);
     });
+
+    Route::put('profile/password', [ProfileController::class, 'changePassword']);
+    Route::post('users/{user}/reset-password', [UserController::class, 'resetPassword']);
 
     // Tasks
     Route::post('projects/{project}/tasks',          [ProjectController::class, 'storeTask']);
