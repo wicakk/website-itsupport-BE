@@ -1,5 +1,4 @@
 <?php
-// database/migrations/2026_03_20_200000_fix_resolution_time_minutes.php
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Support\Facades\DB;
@@ -8,19 +7,20 @@ return new class extends Migration
 {
     public function up(): void
     {
-        // PostgreSQL: pakai EXTRACT(EPOCH FROM ...) / 60 untuk menghitung menit
+        // Case 1: resolved_at sudah ada
         DB::statement("
             UPDATE tickets
-            SET resolution_time_minutes = EXTRACT(EPOCH FROM (resolved_at - created_at))::INTEGER / 60
+            SET resolution_time_minutes = TIMESTAMPDIFF(MINUTE, created_at, resolved_at)
             WHERE status IN ('Resolved', 'Closed')
               AND resolved_at IS NOT NULL
               AND (resolution_time_minutes IS NULL OR resolution_time_minutes = 0)
         ");
 
+        // Case 2: resolved_at NULL → pakai updated_at
         DB::statement("
             UPDATE tickets
             SET resolved_at = updated_at,
-                resolution_time_minutes = EXTRACT(EPOCH FROM (updated_at - created_at))::INTEGER / 60
+                resolution_time_minutes = TIMESTAMPDIFF(MINUTE, created_at, updated_at)
             WHERE status IN ('Resolved', 'Closed')
               AND resolved_at IS NULL
               AND (resolution_time_minutes IS NULL OR resolution_time_minutes = 0)
@@ -29,6 +29,10 @@ return new class extends Migration
 
     public function down(): void
     {
-        // tidak perlu rollback data
+        // optional: kosongin lagi kalau mau rollback
+        DB::statement("
+            UPDATE tickets
+            SET resolution_time_minutes = NULL
+        ");
     }
 };
