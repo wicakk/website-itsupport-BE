@@ -16,6 +16,7 @@ use App\Http\Controllers\Api\TicketCategoryController;
 use App\Http\Controllers\Api\MasterLocationController;
 use App\Http\Controllers\Api\MasterAssetCategoryController;
 use App\Http\Controllers\Api\ProfileController;
+use App\Http\Controllers\Api\ProjectReportController;
 
 
 // ─── Public routes ─────────────────────────
@@ -76,6 +77,17 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('reports/technicians', [ReportController::class, 'technicians']);
     Route::get('reports/assets',      [ReportController::class, 'assets']);
     Route::get('reports/export',      [ReportController::class, 'export']);
+
+    // Project Reports
+    Route::prefix('project-reports')->group(function () {
+        Route::get('/summary', [ReportController::class, 'summaryproject']);
+        Route::get('/projects', [ReportController::class, 'projects']);
+        Route::get('/tasks', [ReportController::class, 'tasks']);
+        Route::get('/team-performance', [ReportController::class, 'teamPerformance']);
+        Route::get('/timeline', [ReportController::class, 'timeline']);
+    });
+
+
 
     // Server Monitoring
     Route::get('monitoring',                [ServerMonitorController::class, 'index']);
@@ -146,5 +158,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('roles',                    [RoleController::class, 'index']);
         Route::put('roles/{role}/permissions', [RoleController::class, 'syncPermissions']);
     });
+
+    Route::middleware('auth:sanctum')->group(function () {
+    // ... existing routes ...
+
+    
+
+
+    
+});
 
 });

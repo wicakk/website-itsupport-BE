@@ -11,6 +11,8 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Maatwebsite\Excel\Facades\Excel;
+use App\Models\Project;
+use App\Models\Task;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use PhpOffice\PhpSpreadsheet\Style\Fill;
@@ -572,5 +574,224 @@ class ReportController extends Controller
         $total  = Ticket::whereIn('status', ['Resolved', 'Closed'])->count();
         $onTime = Ticket::whereIn('status', ['Resolved', 'Closed'])->where('sla_breached', false)->count();
         return $total > 0 ? round(($onTime / $total) * 100) : 100;
+    }
+
+
+
+
+    public function summaryproject(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        $query = $this->getProjectsForUser($user);
+
+        if ($request->filled('from')) {
+            $query->where('start_date', '>=', $request->input('from'));
+        }
+        if ($request->filled('to')) {
+            $query->where('created_at', '<=', $request->input('to'));
+        }
+        if ($request->filled('status')) {
+            $query->where('status', $request->input('status'));
+        }
+        if ($request->filled('priority')) {
+            $query->where('priority', $request->input('priority'));
+        }
+
+        $projects = $query->get();
+
+        $totalTasks = Task::whereIn('project_id', $projects->pluck('id'))->count();
+        $completedTasks = Task::whereIn('project_id', $projects->pluck('id'))
+            ->whereHas('column', fn($q) => $q->where('name', 'Prod'))
+            ->count();
+
+        $avgProgress = $projects->count() > 0
+            ? round($projects->avg('task_stats.progress') ?? 0)
+            : 0;
+
+        return response()->json([
+            'total_projects' => $projects->count(),
+            'active_projects' => $projects->where('status', 'active')->count(),
+            'total_tasks' => $totalTasks,
+            'completed_tasks' => $completedTasks,
+            'avg_progress' => $avgProgress,
+        ]);
+    }
+
+    /** 
+     * ✨ PERUBAHAN: GET /api/project-reports/projects
+     * Tambahkan members (nama-nama anggota tim)
+     */
+    public function projects(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        $query = $this->getProjectsForUser($user)
+            ->with([
+                'creator:id,name',
+                'members:id,name'  // ✨ Load members
+            ])
+            ->withCount('tasks');
+
+        if ($request->filled('from')) {
+            $query->where('created_at', '>=', $request->input('from'));
+        }
+        if ($request->filled('to')) {
+            $query->where('created_at', '<=', $request->input('to'));
+        }
+        if ($request->filled('status')) {
+            $query->where('status', $request->input('status'));
+        }
+        if ($request->filled('priority')) {
+            $query->where('priority', $request->input('priority'));
+        }
+
+        $projects = $query->latest()->get()->map(function ($project) {
+            $columns = $project->columns()->withCount('tasks')->orderBy('position')->get();
+            $totalColumns = $columns->count();
+            $totalTasks = 0;
+            $weightedScore = 0.0;
+
+            foreach ($columns as $index => $column) {
+                $count = $column->tasks_count ?? 0;
+                if ($count === 0) continue;
+
+                $totalTasks += $count;
+
+                $weight = $totalColumns > 1
+                    ? ($index / ($totalColumns - 1)) * 100
+                    : 100.0;
+
+                $weightedScore += $count * $weight;
+            }
+
+            $lastColumn = $columns->last();
+            $completed = $lastColumn ? ($lastColumn->tasks_count ?? 0) : 0;
+            $progress = $totalTasks > 0
+                ? (int)round($weightedScore / $totalTasks)
+                : 0;
+
+            // ✨ TAMBAHAN: Extract member names
+            return [
+                'name' => $project->name,
+                'category' => $project->category ?? '—',
+                'status' => $project->status,
+                'priority' => $project->priority ?? 'medium',
+                'progress' => min(100, max(0, $progress)),
+                'total_tasks' => $totalTasks,
+                'completed_tasks' => $completed,
+                'creator_name' => $project->creator->name ?? '—',
+                'members' => $project->members->pluck('name')->all(),  // ✨ Nama-nama anggota
+                'start_date' => $project->start_date,
+                'due_date' => $project->due_date,
+            ];
+        });
+
+        if ($request->input('format') === 'excel') {
+            return $this->exportExcel($projects, 'project-report');
+        }
+
+        return response()->json(['data' => $projects]);
+    }
+
+    /** GET /api/project-reports/tasks */
+    public function tasks(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        $projectIds = $this->getProjectsForUser($user)->pluck('id');
+
+        $query = Task::whereIn('project_id', $projectIds)
+            ->with(['project:id,name', 'column:id,name', 'assignee:id,name', 'assignees:id,name']);
+
+        if ($request->filled('from')) {
+            $query->where('created_at', '>=', $request->input('from'));
+        }
+        if ($request->filled('to')) {
+            $query->where('created_at', '<=', $request->input('to'));
+        }
+        if ($request->filled('priority')) {
+            $query->where('priority', $request->input('priority'));
+        }
+
+        $tasks = $query->latest()->get()->map(fn($task) => [
+            'project_name' => $task->project->name ?? '—',
+            'task_title' => $task->title,
+            'column_name' => $task->column->name ?? '—',
+            'priority' => $task->priority,
+            'assigned_name' => $task->assignee->name ?? 'Unassigned',
+            'due_date' => $task->due_date,
+            'created_at' => $task->created_at,
+        ]);
+
+        if ($request->input('format') === 'excel') {
+            return $this->exportExcel($tasks, 'task-report');
+        }
+
+        return response()->json(['data' => $tasks]);
+    }
+
+    /** GET /api/project-reports/team-performance */
+    public function teamPerformance(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        $projectIds = $this->getProjectsForUser($user)->pluck('id');
+
+        $query = User::whereHas('projects', fn($q) => $q->whereIn('project_id', $projectIds))
+            ->orWhereHas('assignedTasks', fn($q) => $q->whereIn('project_id', $projectIds));
+
+        $users = $query->get()->map(function ($user) use ($projectIds) {
+            $assignedTasks = Task::whereIn('project_id', $projectIds)
+                ->where('assigned_to', $user->id)
+                ->count();
+
+            $completedTasks = Task::whereIn('project_id', $projectIds)
+                ->where('assigned_to', $user->id)
+                ->whereHas('column', fn($q) => $q->where('name', 'Prod'))
+                ->count();
+
+            $inProgress = Task::whereIn('project_id', $projectIds)
+                ->where('assigned_to', $user->id)
+                ->whereHas('column', fn($q) => $q->whereNotIn('name', ['Prod', 'Mulai Project']))
+                ->count();
+
+            $completionRate = $assignedTasks > 0
+                ? round(($completedTasks / $assignedTasks) * 100)
+                : 0;
+
+            $projectsCount = $user->projects()
+                ->whereIn('project_id', $projectIds)
+                ->distinct('project_id')
+                ->count();
+
+            return [
+                'name' => $user->name,
+                'role' => $user->role ?? '—',
+                'total_assigned' => $assignedTasks,
+                'completed_tasks' => $completedTasks,
+                'in_progress' => $inProgress,
+                'completion_rate' => $completionRate,
+                'projects_count' => $projectsCount,
+            ];
+        })->filter(fn($u) => $u['total_assigned'] > 0);
+
+        if ($request->input('format') === 'excel') {
+            return $this->exportExcel($users->values(), 'team-performance');
+        }
+
+        return response()->json(['data' => $users->values()]);
+    }
+
+    // ── Helpers ────────────────────────────────────────────────
+
+    private function getProjectsForUser($user)
+    {
+        return Project::where(function ($q) use ($user) {
+            $q->where('created_by', $user->id)
+              ->orWhereHas('members', fn($m) => $m->where('user_id', $user->id));
+        });
+    }
+
+    private function exportExcel($data, $filename)
+    {
+        // TODO: Implement Excel export
+        return response()->json($data);
     }
 }
