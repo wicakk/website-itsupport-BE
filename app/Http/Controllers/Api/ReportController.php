@@ -19,7 +19,7 @@ use PhpOffice\PhpSpreadsheet\Style\Border;
 
 class ReportController extends Controller
 {
-    // ── SLA target (menit) ────────────────────────────────────────────────────
+    // ── SLA target ────────────────────────────────────────────────────────────
     private const SLA_TARGET = [
         'Critical' => '4 Jam',
         'High'     => '8 Jam',
@@ -27,71 +27,105 @@ class ReportController extends Controller
         'Low'      => '72 Jam',
     ];
 
+    // ── Helper: apply common filters (from, to, user_id, status) ke query Ticket ──
+    private function applyTicketFilters($query, Request $request)
+    {
+        if ($request->filled('from'))    $query->whereDate('created_at', '>=', $request->from);
+        if ($request->filled('to'))      $query->whereDate('created_at', '<=', $request->to);
+        if ($request->filled('status'))  $query->where('status', $request->status);
+
+        // user_id: filter by requester_id ATAU assigned_to (fleksibel)
+        if ($request->filled('user_id')) {
+            $uid = $request->user_id;
+            $query->where(function ($q) use ($uid) {
+                $q->where('requester_id', $uid)
+                  ->orWhere('assigned_to', $uid);
+            });
+        }
+
+        return $query;
+    }
+
     /**
      * GET /api/reports/summary
+     * Mendukung filter: month, year, from, to, user_id, status
      */
     public function summary(Request $request): JsonResponse
     {
         $month = $request->get('month', now()->month);
         $year  = $request->get('year',  now()->year);
 
-        // Tiket bulan ini (berdasarkan created_at)
-        $monthTickets = Ticket::whereMonth('created_at', $month)->whereYear('created_at', $year);
+        // Base query bulan ini
+        $base = Ticket::whereMonth('created_at', $month)->whereYear('created_at', $year);
 
-        // Resolved: tiket bulan ini yang statusnya Resolved atau Closed
-        $resolvedThisMonth = (clone $monthTickets)->whereIn('status', ['Resolved', 'Closed'])->count();
+        // Terapkan filter tambahan jika ada
+        $base = $this->applyTicketFilters($base, $request);
 
-        // Avg resolution: semua tiket resolved/closed yang punya resolution_time_minutes
-        $avgMinutes = Ticket::whereIn('status', ['Resolved', 'Closed'])
+        // Clone untuk tiap perhitungan
+        $resolvedThisMonth = (clone $base)->whereIn('status', ['Resolved', 'Closed'])->count();
+
+        $avgMinutes = (clone $base)
+            ->whereIn('status', ['Resolved', 'Closed'])
             ->whereNotNull('resolution_time_minutes')
-            ->whereMonth('created_at', $month)
-            ->whereYear('created_at', $year)
             ->avg('resolution_time_minutes') ?? 0;
 
+        // SLA score: jika ada filter user_id/status, hitung dalam konteks filter tersebut
+        $slaQuery = $this->applyTicketFilters(
+            Ticket::whereIn('status', ['Resolved', 'Closed']),
+            $request
+        );
+        $slaTotal  = (clone $slaQuery)->count();
+        $slaOnTime = (clone $slaQuery)->where('sla_breached', false)->count();
+        $slaScore  = $slaTotal > 0 ? round(($slaOnTime / $slaTotal) * 100) : 100;
+
+        // Open & overdue: terapkan filter kecuali status (supaya tetap relevan)
+        $openQuery = $this->applyTicketFilters(
+            Ticket::whereNotIn('status', ['Resolved', 'Closed']),
+            (clone $request)->replace(array_merge($request->all(), ['status' => '']))
+        );
+
         return response()->json([
-            'total_tickets'  => (clone $monthTickets)->count(),
+            'total_tickets'  => (clone $base)->count(),
             'resolved'       => $resolvedThisMonth,
-            'open'           => (clone $monthTickets)->where('status', 'Open')->count(),
-            'in_progress'    => (clone $monthTickets)->whereIn('status', ['Assigned','In Progress','Waiting User'])->count(),
+            'open'           => (clone $base)->where('status', 'Open')->count(),
+            'in_progress'    => (clone $base)->whereIn('status', ['Assigned', 'In Progress', 'Waiting User'])->count(),
             'avg_resolution' => round($avgMinutes / 60, 1),
-            'sla_score'      => $this->calcOverallSla(),
-            'open_tickets'   => Ticket::whereNotIn('status', ['Resolved','Closed'])->count(),
-            'overdue_tickets'=> Ticket::overdue()->count(),
+            'sla_score'      => $slaScore,
+            'open_tickets'   => $openQuery->count(),
+            'overdue_tickets' => $this->applyTicketFilters(Ticket::overdue(), $request)->count(),
         ]);
     }
 
     /**
      * GET /api/reports/tickets?format=json|pdf|excel
+     * Filter: from, to, user_id, status
      */
     public function tickets(Request $request)
     {
         $query = Ticket::with(['requester:id,name,department', 'assignee:id,name'])
             ->latest();
 
-        if ($request->filled('from'))   $query->whereDate('created_at', '>=', $request->from);
-        if ($request->filled('to'))     $query->whereDate('created_at', '<=', $request->to);
-        if ($request->filled('status')) $query->where('status', $request->status);
+        $query = $this->applyTicketFilters($query, $request);
 
         $format = strtolower($request->get('format', 'json'));
 
         if ($format === 'excel') return $this->exportTicketsExcel($query->get());
         if ($format === 'pdf')   return $this->exportTicketsPdf($query->limit(200)->get());
 
-        // JSON preview — return data array dengan field lengkap
         $tickets = $query->paginate(20);
         $tickets->getCollection()->transform(fn($t) => [
-            'id'             => $t->id,
-            'ticket_number'  => $t->ticket_number ?? "#{$t->id}",
-            'title'          => $t->title,
-            'category'       => $t->category,
-            'priority'       => $t->priority,
-            'status'         => $t->status,
-            'requester'      => $t->requester ? ['name' => $t->requester->name] : null,
-            'assignee'       => $t->assignee  ? ['name' => $t->assignee->name]  : null,
-            'created_at'     => $t->created_at?->toISOString(),
-            'resolved_at'    => $t->resolved_at?->toISOString(),
-            'sla_deadline'   => $t->sla_deadline?->toISOString(),
-            'sla_breached'   => (bool) $t->sla_breached,
+            'id'            => $t->id,
+            'ticket_number' => $t->ticket_number ?? "#{$t->id}",
+            'title'         => $t->title,
+            'category'      => $t->category,
+            'priority'      => $t->priority,
+            'status'        => $t->status,
+            'requester'     => $t->requester ? ['name' => $t->requester->name, 'department' => $t->requester->department] : null,
+            'assignee'      => $t->assignee  ? ['name' => $t->assignee->name] : null,
+            'created_at'    => $t->created_at?->toISOString(),
+            'resolved_at'   => $t->resolved_at?->toISOString(),
+            'sla_deadline'  => $t->sla_deadline?->toISOString(),
+            'sla_breached'  => (bool) $t->sla_breached,
         ]);
 
         return response()->json($tickets);
@@ -99,15 +133,31 @@ class ReportController extends Controller
 
     /**
      * GET /api/reports/sla?format=json|pdf|excel
+     * Filter: from, to, user_id
+     * (filter status tidak relevan untuk SLA — SLA hanya pada Resolved/Closed)
      */
     public function sla(Request $request)
     {
         $rows = [];
         foreach (['Critical', 'High', 'Medium', 'Low'] as $p) {
-            $total    = Ticket::where('priority', $p)->whereIn('status', ['Resolved','Closed'])->count();
-            $onTime   = Ticket::where('priority', $p)->whereIn('status', ['Resolved','Closed'])->where('sla_breached', false)->count();
+            // Base: tiket resolved/closed dengan prioritas ini
+            $base = Ticket::where('priority', $p)->whereIn('status', ['Resolved', 'Closed']);
+
+            // Terapkan filter date & user_id (skip status filter)
+            if ($request->filled('from'))    $base->whereDate('created_at', '>=', $request->from);
+            if ($request->filled('to'))      $base->whereDate('created_at', '<=', $request->to);
+            if ($request->filled('user_id')) {
+                $uid = $request->user_id;
+                $base->where(function ($q) use ($uid) {
+                    $q->where('requester_id', $uid)->orWhere('assigned_to', $uid);
+                });
+            }
+
+            $total    = (clone $base)->count();
+            $onTime   = (clone $base)->where('sla_breached', false)->count();
             $breached = $total - $onTime;
-            $rows[]   = [
+
+            $rows[] = [
                 'priority' => $p,
                 'target'   => self::SLA_TARGET[$p],
                 'total'    => $total,
@@ -126,26 +176,44 @@ class ReportController extends Controller
 
     /**
      * GET /api/reports/technicians?format=json|pdf|excel
+     * Filter: from, to, user_id (jika user_id diisi, hanya tampilkan teknisi itu)
      */
     public function technicians(Request $request)
     {
-        $techs = User::technicians()
-            ->withCount([
-                'assignedTickets as total_assigned',
-                'assignedTickets as total_resolved' => fn($q) => $q->whereIn('status', ['Resolved','Closed']),
-                'assignedTickets as sla_met'        => fn($q) => $q->whereIn('status', ['Resolved','Closed'])->where('sla_breached', false),
-            ])
-            ->addSelect(DB::raw("(SELECT ROUND(AVG(resolution_time_minutes)/60,1) FROM tickets WHERE assigned_to=users.id AND status IN ('Resolved','Closed')) as avg_hours"))
-            ->get()
-            ->map(fn($u) => [
+        $techQuery = User::technicians();
+
+        // Jika filter user_id ada, batasi ke teknisi tersebut
+        if ($request->filled('user_id')) {
+            $techQuery->where('id', $request->user_id);
+        }
+
+        $techs = $techQuery->get()->map(function ($u) use ($request) {
+            // Sub-query tiket yang di-assign ke teknisi ini
+            $base = Ticket::where('assigned_to', $u->id);
+
+            // Terapkan filter date
+            if ($request->filled('from')) $base->whereDate('created_at', '>=', $request->from);
+            if ($request->filled('to'))   $base->whereDate('created_at', '<=', $request->to);
+
+            $totalAssigned  = (clone $base)->count();
+            $totalResolved  = (clone $base)->whereIn('status', ['Resolved', 'Closed'])->count();
+            $slaMet         = (clone $base)->whereIn('status', ['Resolved', 'Closed'])->where('sla_breached', false)->count();
+
+            $avgMinutes = (clone $base)
+                ->whereIn('status', ['Resolved', 'Closed'])
+                ->whereNotNull('resolution_time_minutes')
+                ->avg('resolution_time_minutes') ?? 0;
+
+            return [
                 'name'           => $u->name,
                 'role'           => $u->role_display ?? 'IT Support',
-                'total_assigned' => $u->total_assigned ?? 0,
-                'resolved_count' => $u->total_resolved ?? 0,
-                'sla_met'        => $u->sla_met ?? 0,
-                'sla_score'      => ($u->total_resolved ?? 0) > 0 ? round(($u->sla_met / $u->total_resolved) * 100) : 100,
-                'avg_hours'      => $u->avg_hours ?? 0,
-            ]);
+                'total_assigned' => $totalAssigned,
+                'resolved_count' => $totalResolved,
+                'sla_met'        => $slaMet,
+                'sla_score'      => $totalResolved > 0 ? round(($slaMet / $totalResolved) * 100) : 100,
+                'avg_hours'      => round($avgMinutes / 60, 1),
+            ];
+        });
 
         $format = strtolower($request->get('format', 'json'));
         if ($format === 'excel') return $this->exportTechExcel($techs->toArray());
@@ -156,17 +224,26 @@ class ReportController extends Controller
 
     /**
      * GET /api/reports/assets?format=json|pdf|excel
+     * Filter: from (purchase_date >=), to (purchase_date <=), status
+     * (user_id tidak relevan untuk aset — tidak ada relasi langsung)
      */
     public function assets(Request $request)
     {
-        $format = strtolower($request->get('format', 'json'));
+        $query = Asset::orderBy('category')->orderBy('name');
 
-        $assets = Asset::orderBy('category')->orderBy('name')->get();
+        // Filter tanggal berdasarkan purchase_date
+        if ($request->filled('from')) $query->whereDate('purchase_date', '>=', $request->from);
+        if ($request->filled('to'))   $query->whereDate('purchase_date', '<=', $request->to);
+
+        // Filter status aset
+        if ($request->filled('status')) $query->where('status', $request->status);
+
+        $format = strtolower($request->get('format', 'json'));
+        $assets = $query->get();
 
         if ($format === 'excel') return $this->exportAssetsExcel($assets);
         if ($format === 'pdf')   return $this->exportAssetsPdf($assets);
 
-        // JSON — return data array langsung untuk preview tabel
         $data = $assets->map(fn($a) => [
             'asset_number'    => $a->asset_number,
             'name'            => $a->name,
@@ -193,7 +270,7 @@ class ReportController extends Controller
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // EXCEL EXPORTS — PhpSpreadsheet (tidak perlu maatwebsite/excel)
+    // EXCEL EXPORTS
     // ══════════════════════════════════════════════════════════════════════════
 
     private function buildSpreadsheet(array $headers, array $rows, string $title): Spreadsheet
@@ -201,7 +278,6 @@ class ReportController extends Controller
         $ss    = new Spreadsheet();
         $sheet = $ss->getActiveSheet()->setTitle($title);
 
-        // ── Title row ──
         $sheet->setCellValue('A1', $title);
         $sheet->mergeCells('A1:' . \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex(count($headers)) . '1');
         $sheet->getStyle('A1')->applyFromArray([
@@ -211,7 +287,6 @@ class ReportController extends Controller
         ]);
         $sheet->getRowDimension(1)->setRowHeight(24);
 
-        // ── Subtitle ──
         $sheet->setCellValue('A2', 'Digenerate: ' . now()->format('d M Y H:i'));
         $sheet->mergeCells('A2:' . \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex(count($headers)) . '2');
         $sheet->getStyle('A2')->applyFromArray([
@@ -219,20 +294,18 @@ class ReportController extends Controller
             'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
         ]);
 
-        // ── Header row (row 4) ──
         foreach ($headers as $colIdx => $label) {
             $colLetter = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($colIdx + 1);
             $sheet->setCellValue("{$colLetter}4", $label);
             $sheet->getStyle("{$colLetter}4")->applyFromArray([
-                'font' => ['bold' => true, 'color' => ['argb' => 'FFFFFFFF']],
-                'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['argb' => 'FF2563EB']],
+                'font'      => ['bold' => true, 'color' => ['argb' => 'FFFFFFFF']],
+                'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['argb' => 'FF2563EB']],
                 'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
-                'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['argb' => 'FFCCE0FF']]],
+                'borders'   => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['argb' => 'FFCCE0FF']]],
             ]);
             $sheet->getColumnDimensionByColumn($colIdx + 1)->setAutoSize(true);
         }
 
-        // ── Data rows ──
         foreach ($rows as $rIdx => $row) {
             $rowNum = $rIdx + 5;
             $bg     = $rIdx % 2 === 0 ? 'FFF8FAFF' : 'FFFFFFFF';
@@ -240,8 +313,8 @@ class ReportController extends Controller
                 $colLetter = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($cIdx + 1);
                 $sheet->setCellValue("{$colLetter}{$rowNum}", $val ?? '');
                 $sheet->getStyle("{$colLetter}{$rowNum}")->applyFromArray([
-                    'fill'    => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['argb' => $bg]],
-                    'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['argb' => 'FFDDDDDD']]],
+                    'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['argb' => $bg]],
+                    'borders'   => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['argb' => 'FFDDDDDD']]],
                     'alignment' => ['vertical' => Alignment::VERTICAL_CENTER],
                 ]);
             }
@@ -331,7 +404,7 @@ class ReportController extends Controller
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // PDF EXPORTS — DomPDF (barryvdh/laravel-dompdf)
+    // PDF EXPORTS
     // ══════════════════════════════════════════════════════════════════════════
 
     private function exportTicketsPdf($tickets)
@@ -451,7 +524,6 @@ class ReportController extends Controller
         return Pdf::loadHTML($html)->setPaper('a4', 'landscape')->download('assets-report.pdf');
     }
 
-    // ── HTML wrapper untuk semua PDF ──────────────────────────────────────────
     private function pdfWrapper(string $title, string $generated, string $body): string
     {
         return <<<HTML
@@ -462,26 +534,19 @@ class ReportController extends Controller
             <style>
                 * { margin:0; padding:0; box-sizing:border-box; }
                 body { font-family: 'DejaVu Sans', Arial, sans-serif; font-size:9px; color:#1e293b; }
-
                 .header { background:#1e3a5f; color:#fff; padding:16px 20px; margin-bottom:16px; }
                 .header h1 { font-size:16px; font-weight:700; letter-spacing:0.5px; }
                 .header .sub { font-size:8px; color:#93c5fd; margin-top:3px; }
-
                 table { width:100%; border-collapse:collapse; margin:0 20px; width:calc(100% - 40px); }
                 thead tr { background:#2563eb; color:#fff; }
                 th { padding:7px 8px; text-align:left; font-size:8px; font-weight:600; text-transform:uppercase; letter-spacing:0.4px; border:1px solid #1d4ed8; }
                 td { padding:6px 8px; border:1px solid #e2e8f0; vertical-align:middle; }
                 tbody tr:nth-child(even) { background:#f8faff; }
-                tbody tr:hover { background:#eff6ff; }
-
                 .footer { position:fixed; bottom:10px; left:20px; right:20px; font-size:7px; color:#94a3b8; border-top:1px solid #e2e8f0; padding-top:5px; display:flex; justify-content:space-between; }
-
-                /* Priority colors */
                 .pri-Critical { color:#dc2626; font-weight:700; }
                 .pri-High     { color:#ea580c; font-weight:700; }
                 .pri-Medium   { color:#d97706; }
                 .pri-Low      { color:#16a34a; }
-
                 .ok      { color:#10b981; font-weight:700; }
                 .breached{ color:#ef4444; font-weight:700; }
             </style>
@@ -491,9 +556,7 @@ class ReportController extends Controller
                 <h1>$title</h1>
                 <div class="sub">IT Support Management System &nbsp;·&nbsp; Digenerate: $generated</div>
             </div>
-
             $body
-
             <div class="footer">
                 <span>IT Support Management System</span>
                 <span>$title — $generated</span>
@@ -504,11 +567,10 @@ class ReportController extends Controller
         HTML;
     }
 
-    // ── Private helper ────────────────────────────────────────────────────────
     private function calcOverallSla(): int
     {
-        $total  = Ticket::whereIn('status', ['Resolved','Closed'])->count();
-        $onTime = Ticket::whereIn('status', ['Resolved','Closed'])->where('sla_breached', false)->count();
+        $total  = Ticket::whereIn('status', ['Resolved', 'Closed'])->count();
+        $onTime = Ticket::whereIn('status', ['Resolved', 'Closed'])->where('sla_breached', false)->count();
         return $total > 0 ? round(($onTime / $total) * 100) : 100;
     }
 }

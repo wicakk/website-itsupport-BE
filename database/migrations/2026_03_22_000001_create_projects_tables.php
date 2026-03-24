@@ -40,7 +40,7 @@ return new class extends Migration
             $table->id();
             $table->foreignId('project_id')->constrained()->onDelete('cascade');
             $table->string('name');
-            $table->string('color', 7)->default('#94A3B8');
+            $table->string('color', 9)->default('#94A3B8');
             $table->unsignedInteger('position')->default(0);
             $table->timestamps();
         });

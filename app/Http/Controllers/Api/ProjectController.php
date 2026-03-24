@@ -22,10 +22,12 @@ class ProjectController extends Controller
         ['name' => 'Mulai Project',    'color' => '#94A3B8', 'position' => 0],
         ['name' => 'Analisa',          'color' => '#6366f1', 'position' => 1],
         ['name' => 'Develop Local',    'color' => '#F59E0B', 'position' => 2],
-        ['name' => 'Develop Staging',  'color' => '#8B5CF6', 'position' => 3],
-        ['name' => 'UAT',              'color' => '#06B6D4', 'position' => 4],
-        ['name' => 'Prod',             'color' => '#10B981', 'position' => 5],
-        ['name' => 'Revisi',           'color' => '#F97316', 'position' => 6],
+        ['name' => 'Testing Lokal',    'color' => '#FBBF24', 'position' => 3], // baru
+        ['name' => 'Develop Staging',  'color' => '#8B5CF6', 'position' => 4],
+        ['name' => 'Testing Staging',  'color' => '#A78BFA', 'position' => 5], // baru
+        ['name' => 'UAT',              'color' => '#06B6D4', 'position' => 6],
+        ['name' => 'Prod',             'color' => '#10B981', 'position' => 7],
+        ['name' => 'Revisi',           'color' => '#F97316', 'position' => 8],
     ];
 
     /** GET /api/projects */
