@@ -1,5 +1,4 @@
 <?php
-// app/Http/Controllers/Api/ProjectController.php
 
 namespace App\Http\Controllers\Api;
 
@@ -17,18 +16,60 @@ use Illuminate\Support\Facades\Storage;
 
 class ProjectController extends Controller
 {
+    // ✨ FIXED_WEIGHT untuk perhitungan progress
+    private const FIXED_WEIGHT = [
+        'Mulai Project'    => 0,
+        'Analisa'          => 17,
+        'Develop Local'    => 33,
+        'Testing Lokal'    => 42,
+        'Develop Staging'  => 50,
+        'Testing Staging'  => 75,
+        'UAT'              => 67,
+        'Prod'             => 100,
+        'Revisi'           => 57,
+    ];
+
     // ── Kolom Kanban default (baru) ───────────────────────────────
     private array $defaultColumns = [
         ['name' => 'Mulai Project',    'color' => '#94A3B8', 'position' => 0],
         ['name' => 'Analisa',          'color' => '#6366f1', 'position' => 1],
         ['name' => 'Develop Local',    'color' => '#F59E0B', 'position' => 2],
-        ['name' => 'Testing Lokal',    'color' => '#FBBF24', 'position' => 3], // baru
+        ['name' => 'Testing Lokal',    'color' => '#FBBF24', 'position' => 3],
         ['name' => 'Develop Staging',  'color' => '#8B5CF6', 'position' => 4],
-        ['name' => 'Testing Staging',  'color' => '#A78BFA', 'position' => 5], // baru
+        ['name' => 'Testing Staging',  'color' => '#A78BFA', 'position' => 5],
         ['name' => 'UAT',              'color' => '#06B6D4', 'position' => 6],
         ['name' => 'Prod',             'color' => '#10B981', 'position' => 7],
         ['name' => 'Revisi',           'color' => '#F97316', 'position' => 8],
     ];
+
+    // ✨ HELPER: Hitung progress dengan FIXED_WEIGHT
+    private function calculateProgress(Project $project)
+    {
+        $columns = $project->columns()->withCount('tasks')->orderBy('position')->get();
+        
+        $totalTasks = 0;
+        $weightedScore = 0.0;
+
+        foreach ($columns as $column) {
+            $count = $column->tasks_count ?? 0;
+            if ($count === 0) continue;
+
+            $totalTasks += $count;
+            $weight = self::FIXED_WEIGHT[$column->name] ?? 0;
+            $weightedScore += $count * $weight;
+        }
+
+        // Hitung progress
+        $progress = $totalTasks > 0 ? (int)round($weightedScore / $totalTasks) : 0;
+        
+        // ✨ Jika semua task di 'Prod', progress harus 100%
+        $prodColumn = $columns->firstWhere('name', 'Prod');
+        if ($prodColumn && $prodColumn->tasks_count == $totalTasks && $totalTasks > 0) {
+            $progress = 100;
+        }
+
+        return min(100, max(0, $progress));
+    }
 
     /** GET /api/projects */
     public function index(Request $request): JsonResponse
@@ -39,7 +80,6 @@ class ProjectController extends Controller
                 'creator:id,name,initials,color',
                 'members:id,name,initials,color',
                 'attachments',
-                // ── Load kolom beserta jumlah task per kolom ──
                 'columns' => fn($q) => $q->withCount('tasks')->orderBy('position'),
             ])
             ->where(function ($q) use ($user) {
@@ -49,47 +89,27 @@ class ProjectController extends Controller
             ->latest()
             ->get()
             ->map(function ($project) {
-                $columns      = $project->columns; // sudah include tasks_count
-                $totalColumns = $columns->count();
-                $totalTasks   = 0;
-                $weightedScore = 0.0;
+                // ✨ Gunakan FIXED_WEIGHT helper
+                $progress = $this->calculateProgress($project);
 
-                foreach ($columns as $index => $column) {
+                $columns = $project->columns;
+                $totalTasks = 0;
+                $completedTasks = 0;
+
+                foreach ($columns as $column) {
                     $count = $column->tasks_count ?? 0;
-                    if ($count === 0) continue;
-
                     $totalTasks += $count;
-
-                    // Bobot: kolom pertama = 0%, kolom terakhir = 100%
-                    // Contoh 5 kolom:
-                    //   index 0 (Mulai Project)  →   0%
-                    //   index 1 (Analisa)         →  25%
-                    //   index 2 (Develop Local)   →  50%
-                    //   index 3 (Develop Staging) →  75%
-                    //   index 4 (Prod)            → 100%
-                    $weight = $totalColumns > 1
-                        ? ($index / ($totalColumns - 1)) * 100
-                        : 100.0;
-
-                    $weightedScore += $count * $weight;
+                    if ($column->name === 'Prod') {
+                        $completedTasks = $count;
+                    }
                 }
-
-                // Task di kolom terakhir = "completed"
-                $lastColumn = $columns->last();
-                $completed  = $lastColumn ? ($lastColumn->tasks_count ?? 0) : 0;
-
-                $progress = $totalTasks > 0
-                    ? (int) round($weightedScore / $totalTasks)
-                    : 0;
 
                 $project->task_stats = [
                     'total'     => $totalTasks,
-                    'completed' => $completed,
-                    'progress'  => min(100, max(0, $progress)),
+                    'completed' => $completedTasks,
+                    'progress'  => $progress,
                 ];
 
-                // Sertakan columns (name, color, tasks_count) untuk tampilan breakdown
-                // columns sudah di-load dengan withCount('tasks') di atas
                 $project->setRelation('columns', $columns->map(fn($col) => [
                     'id'          => $col->id,
                     'name'        => $col->name,
@@ -127,15 +147,12 @@ class ProjectController extends Controller
             'status'     => $validated['status'] ?? 'active',
         ]);
 
-        // Buat kolom Kanban default baru
         foreach ($this->defaultColumns as $col) {
             TaskColumn::create(['project_id' => $project->id, ...$col]);
         }
 
-        // Creator sebagai owner
         $project->members()->attach($request->user()->id, ['role' => 'owner']);
 
-        // Tambah member lain
         if (!empty($validated['member_ids'])) {
             foreach ($validated['member_ids'] as $uid) {
                 if ($uid != $request->user()->id) {
@@ -156,7 +173,6 @@ class ProjectController extends Controller
     {
         $this->authorizeProject($request->user(), $project);
 
-        // Auto-create kolom baru jika project lama (kolom kosong)
         if ($project->columns()->count() === 0) {
             foreach ($this->defaultColumns as $col) {
                 TaskColumn::create(['project_id' => $project->id, ...$col]);
@@ -173,7 +189,6 @@ class ProjectController extends Controller
             'attachments.uploader:id,name',
         ]);
 
-        // Urutkan kolom: Revisi selalu paling akhir, sisanya by position
         $sorted = $project->columns->sortBy(function ($col) {
             return $col->name === 'Revisi' ? 9999 : $col->position;
         })->values();
@@ -256,7 +271,6 @@ class ProjectController extends Controller
             'due_date'     => 'nullable|date',
         ]);
 
-        // Jika assignee_ids dikirim, pakai index pertama sebagai assigned_to
         if (!empty($validated['assignee_ids'])) {
             $validated['assigned_to'] = $validated['assignee_ids'][0];
         }
@@ -276,7 +290,6 @@ class ProjectController extends Controller
             'position'    => $maxPos + 1,
         ]);
 
-        // Sync multi-assignee ke task_assignees
         if (!empty($validated['assignee_ids'])) {
             $task->assignees()->sync($validated['assignee_ids']);
         } elseif (!empty($validated['assigned_to'])) {
@@ -316,11 +329,9 @@ class ProjectController extends Controller
 
         $userId = $request->user()->id;
 
-        // 1. Ambil data LAMA sebelum sync
         $oldAssigneeIds = $task->assignees()->pluck('users.id')->toArray();
         $oldNames       = $task->assignees()->pluck('users.name')->implode(', ') ?: 'Tidak ada';
 
-        // 2. Catat column_changed + assignee aktif saat pindah
         if (isset($validated['column_id']) && (int)$validated['column_id'] !== (int)$task->column_id) {
             $oldCol      = TaskColumn::find($task->column_id)?->name ?? '-';
             $newCol      = TaskColumn::find($validated['column_id'])?->name ?? '-';
@@ -337,7 +348,6 @@ class ProjectController extends Controller
             ]);
         }
 
-        // 3. Sync multi-assignee
         $newAssigneeIds = null;
         if (!empty($validated['assignee_ids'])) {
             $newAssigneeIds = $validated['assignee_ids'];
@@ -348,7 +358,6 @@ class ProjectController extends Controller
             $task->assignees()->sync($newAssigneeIds);
         }
 
-        // 4. Catat assignee_changed jika berubah
         if ($newAssigneeIds !== null) {
             $sortedOld = $oldAssigneeIds; sort($sortedOld);
             $sortedNew = $newAssigneeIds; sort($sortedNew);
