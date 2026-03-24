@@ -36,7 +36,6 @@ class ReportController extends Controller
         if ($request->filled('to'))      $query->whereDate('created_at', '<=', $request->to);
         if ($request->filled('status'))  $query->where('status', $request->status);
 
-        // user_id: filter by requester_id ATAU assigned_to (fleksibel)
         if ($request->filled('user_id')) {
             $uid = $request->user_id;
             $query->where(function ($q) use ($uid) {
@@ -50,20 +49,15 @@ class ReportController extends Controller
 
     /**
      * GET /api/reports/summary
-     * Mendukung filter: month, year, from, to, user_id, status
      */
     public function summary(Request $request): JsonResponse
     {
         $month = $request->get('month', now()->month);
         $year  = $request->get('year',  now()->year);
 
-        // Base query bulan ini
         $base = Ticket::whereMonth('created_at', $month)->whereYear('created_at', $year);
-
-        // Terapkan filter tambahan jika ada
         $base = $this->applyTicketFilters($base, $request);
 
-        // Clone untuk tiap perhitungan
         $resolvedThisMonth = (clone $base)->whereIn('status', ['Resolved', 'Closed'])->count();
 
         $avgMinutes = (clone $base)
@@ -71,42 +65,34 @@ class ReportController extends Controller
             ->whereNotNull('resolution_time_minutes')
             ->avg('resolution_time_minutes') ?? 0;
 
-        // SLA score: jika ada filter user_id/status, hitung dalam konteks filter tersebut
-        $slaQuery = $this->applyTicketFilters(
-            Ticket::whereIn('status', ['Resolved', 'Closed']),
-            $request
-        );
+        $slaQuery  = $this->applyTicketFilters(Ticket::whereIn('status', ['Resolved', 'Closed']), $request);
         $slaTotal  = (clone $slaQuery)->count();
         $slaOnTime = (clone $slaQuery)->where('sla_breached', false)->count();
         $slaScore  = $slaTotal > 0 ? round(($slaOnTime / $slaTotal) * 100) : 100;
 
-        // Open & overdue: terapkan filter kecuali status (supaya tetap relevan)
         $openQuery = $this->applyTicketFilters(
             Ticket::whereNotIn('status', ['Resolved', 'Closed']),
             (clone $request)->replace(array_merge($request->all(), ['status' => '']))
         );
 
         return response()->json([
-            'total_tickets'  => (clone $base)->count(),
-            'resolved'       => $resolvedThisMonth,
-            'open'           => (clone $base)->where('status', 'Open')->count(),
-            'in_progress'    => (clone $base)->whereIn('status', ['Assigned', 'In Progress', 'Waiting User'])->count(),
-            'avg_resolution' => round($avgMinutes / 60, 1),
-            'sla_score'      => $slaScore,
-            'open_tickets'   => $openQuery->count(),
+            'total_tickets'   => (clone $base)->count(),
+            'resolved'        => $resolvedThisMonth,
+            'open'            => (clone $base)->where('status', 'Open')->count(),
+            'in_progress'     => (clone $base)->whereIn('status', ['Assigned', 'In Progress', 'Waiting User'])->count(),
+            'avg_resolution'  => round($avgMinutes / 60, 1),
+            'sla_score'       => $slaScore,
+            'open_tickets'    => $openQuery->count(),
             'overdue_tickets' => $this->applyTicketFilters(Ticket::overdue(), $request)->count(),
         ]);
     }
 
     /**
      * GET /api/reports/tickets?format=json|pdf|excel
-     * Filter: from, to, user_id, status
      */
     public function tickets(Request $request)
     {
-        $query = Ticket::with(['requester:id,name,department', 'assignee:id,name'])
-            ->latest();
-
+        $query = Ticket::with(['requester:id,name,department', 'assignee:id,name'])->latest();
         $query = $this->applyTicketFilters($query, $request);
 
         $format = strtolower($request->get('format', 'json'));
@@ -135,17 +121,13 @@ class ReportController extends Controller
 
     /**
      * GET /api/reports/sla?format=json|pdf|excel
-     * Filter: from, to, user_id
-     * (filter status tidak relevan untuk SLA — SLA hanya pada Resolved/Closed)
      */
     public function sla(Request $request)
     {
         $rows = [];
         foreach (['Critical', 'High', 'Medium', 'Low'] as $p) {
-            // Base: tiket resolved/closed dengan prioritas ini
             $base = Ticket::where('priority', $p)->whereIn('status', ['Resolved', 'Closed']);
 
-            // Terapkan filter date & user_id (skip status filter)
             if ($request->filled('from'))    $base->whereDate('created_at', '>=', $request->from);
             if ($request->filled('to'))      $base->whereDate('created_at', '<=', $request->to);
             if ($request->filled('user_id')) {
@@ -178,28 +160,24 @@ class ReportController extends Controller
 
     /**
      * GET /api/reports/technicians?format=json|pdf|excel
-     * Filter: from, to, user_id (jika user_id diisi, hanya tampilkan teknisi itu)
      */
     public function technicians(Request $request)
     {
         $techQuery = User::technicians();
 
-        // Jika filter user_id ada, batasi ke teknisi tersebut
         if ($request->filled('user_id')) {
             $techQuery->where('id', $request->user_id);
         }
 
         $techs = $techQuery->get()->map(function ($u) use ($request) {
-            // Sub-query tiket yang di-assign ke teknisi ini
             $base = Ticket::where('assigned_to', $u->id);
 
-            // Terapkan filter date
             if ($request->filled('from')) $base->whereDate('created_at', '>=', $request->from);
             if ($request->filled('to'))   $base->whereDate('created_at', '<=', $request->to);
 
-            $totalAssigned  = (clone $base)->count();
-            $totalResolved  = (clone $base)->whereIn('status', ['Resolved', 'Closed'])->count();
-            $slaMet         = (clone $base)->whereIn('status', ['Resolved', 'Closed'])->where('sla_breached', false)->count();
+            $totalAssigned = (clone $base)->count();
+            $totalResolved = (clone $base)->whereIn('status', ['Resolved', 'Closed'])->count();
+            $slaMet        = (clone $base)->whereIn('status', ['Resolved', 'Closed'])->where('sla_breached', false)->count();
 
             $avgMinutes = (clone $base)
                 ->whereIn('status', ['Resolved', 'Closed'])
@@ -226,18 +204,13 @@ class ReportController extends Controller
 
     /**
      * GET /api/reports/assets?format=json|pdf|excel
-     * Filter: from (purchase_date >=), to (purchase_date <=), status
-     * (user_id tidak relevan untuk aset — tidak ada relasi langsung)
      */
     public function assets(Request $request)
     {
         $query = Asset::orderBy('category')->orderBy('name');
 
-        // Filter tanggal berdasarkan purchase_date
-        if ($request->filled('from')) $query->whereDate('purchase_date', '>=', $request->from);
-        if ($request->filled('to'))   $query->whereDate('purchase_date', '<=', $request->to);
-
-        // Filter status aset
+        if ($request->filled('from'))   $query->whereDate('purchase_date', '>=', $request->from);
+        if ($request->filled('to'))     $query->whereDate('purchase_date', '<=', $request->to);
         if ($request->filled('status')) $query->where('status', $request->status);
 
         $format = strtolower($request->get('format', 'json'));
@@ -576,31 +549,30 @@ class ReportController extends Controller
         return $total > 0 ? round(($onTime / $total) * 100) : 100;
     }
 
+    // ══════════════════════════════════════════════════════════════════════════
+    // PROJECT REPORTS
+    // ══════════════════════════════════════════════════════════════════════════
 
-
-
+    /**
+     * GET /api/project-reports/summary
+     */
     public function summaryproject(Request $request): JsonResponse
     {
-        $user = $request->user();
+        $user  = $request->user();
         $query = $this->getProjectsForUser($user);
 
-        if ($request->filled('from')) {
-            $query->where('start_date', '>=', $request->input('from'));
-        }
-        if ($request->filled('to')) {
-            $query->where('created_at', '<=', $request->input('to'));
-        }
-        if ($request->filled('status')) {
-            $query->where('status', $request->input('status'));
-        }
-        if ($request->filled('priority')) {
-            $query->where('priority', $request->input('priority'));
-        }
+        if ($request->filled('from'))     $query->whereDate('created_at', '>=', $request->input('from'));
+        if ($request->filled('to'))       $query->where('created_at', '<=', $request->input('to'));
+        if ($request->filled('status'))   $query->where('status', $request->input('status'));
+        if ($request->filled('priority')) $query->where('priority', $request->input('priority'));
 
-        $projects = $query->get();
+        $projects   = $query->get();
+        $projectIds = $projects->pluck('id');
 
-        $totalTasks = Task::whereIn('project_id', $projects->pluck('id'))->count();
-        $completedTasks = Task::whereIn('project_id', $projects->pluck('id'))
+        // ✅ FIX: hitung task via pivot task_assignees, bukan assigned_to
+        $totalTasks = Task::whereIn('project_id', $projectIds)->count();
+
+        $completedTasks = Task::whereIn('project_id', $projectIds)
             ->whereHas('column', fn($q) => $q->where('name', 'Prod'))
             ->count();
 
@@ -609,79 +581,64 @@ class ReportController extends Controller
             : 0;
 
         return response()->json([
-            'total_projects' => $projects->count(),
+            'total_projects'  => $projects->count(),
             'active_projects' => $projects->where('status', 'active')->count(),
-            'total_tasks' => $totalTasks,
+            'total_tasks'     => $totalTasks,
             'completed_tasks' => $completedTasks,
-            'avg_progress' => $avgProgress,
+            'avg_progress'    => $avgProgress,
         ]);
     }
 
-    /** 
-     * ✨ PERUBAHAN: GET /api/project-reports/projects
-     * Tambahkan members (nama-nama anggota tim)
+    /**
+     * GET /api/project-reports/projects
      */
     public function projects(Request $request): JsonResponse
     {
-        $user = $request->user();
+        $user  = $request->user();
         $query = $this->getProjectsForUser($user)
             ->with([
                 'creator:id,name',
-                'members:id,name'  // ✨ Load members
+                'members:id,name',
             ])
             ->withCount('tasks');
 
-        if ($request->filled('from')) {
-            $query->where('created_at', '>=', $request->input('from'));
-        }
-        if ($request->filled('to')) {
-            $query->where('created_at', '<=', $request->input('to'));
-        }
-        if ($request->filled('status')) {
-            $query->where('status', $request->input('status'));
-        }
-        if ($request->filled('priority')) {
-            $query->where('priority', $request->input('priority'));
-        }
+        if ($request->filled('from'))     $query->where('created_at', '>=', $request->input('from'));
+        if ($request->filled('to'))       $query->where('created_at', '<=', $request->input('to'));
+        if ($request->filled('status'))   $query->where('status', $request->input('status'));
+        if ($request->filled('priority')) $query->where('priority', $request->input('priority'));
 
         $projects = $query->latest()->get()->map(function ($project) {
-            $columns = $project->columns()->withCount('tasks')->orderBy('position')->get();
+            $columns      = $project->columns()->withCount('tasks')->orderBy('position')->get();
             $totalColumns = $columns->count();
-            $totalTasks = 0;
+            $totalTasks   = 0;
             $weightedScore = 0.0;
 
             foreach ($columns as $index => $column) {
                 $count = $column->tasks_count ?? 0;
                 if ($count === 0) continue;
 
-                $totalTasks += $count;
-
-                $weight = $totalColumns > 1
-                    ? ($index / ($totalColumns - 1)) * 100
-                    : 100.0;
-
+                $totalTasks    += $count;
+                $weight         = $totalColumns > 1 ? ($index / ($totalColumns - 1)) * 100 : 100.0;
                 $weightedScore += $count * $weight;
             }
 
             $lastColumn = $columns->last();
-            $completed = $lastColumn ? ($lastColumn->tasks_count ?? 0) : 0;
-            $progress = $totalTasks > 0
-                ? (int)round($weightedScore / $totalTasks)
-                : 0;
+            $completed  = $lastColumn ? ($lastColumn->tasks_count ?? 0) : 0;
+            $progress   = $totalTasks > 0 ? (int) round($weightedScore / $totalTasks) : 0;
 
-            // ✨ TAMBAHAN: Extract member names
             return [
-                'name' => $project->name,
-                'category' => $project->category ?? '—',
-                'status' => $project->status,
-                'priority' => $project->priority ?? 'medium',
-                'progress' => min(100, max(0, $progress)),
-                'total_tasks' => $totalTasks,
+                'name'            => $project->name,
+                'category'        => $project->category ?? '—',
+                'status'          => $project->status,
+                'priority'        => $project->priority ?? 'medium',
+                'progress'        => min(100, max(0, $progress)),
+                'total_tasks'     => $totalTasks,
                 'completed_tasks' => $completed,
-                'creator_name' => $project->creator->name ?? '—',
-                'members' => $project->members->pluck('name')->all(),  // ✨ Nama-nama anggota
-                'start_date' => $project->start_date,
-                'due_date' => $project->due_date,
+                'creator_name'    => $project->creator->name ?? '—',
+                'members'         => $project->members->pluck('name')->all(),
+                // ✅ FIX: start_date selalu null, pakai created_at sebagai tanggal mulai
+                'start_date'      => $project->created_at?->locale('id')->isoFormat('D MMM YYYY'),
+                'due_date'        => $project->due_date ? \Carbon\Carbon::parse($project->due_date)->locale('id')->isoFormat('D MMM YYYY') : null,
             ];
         });
 
@@ -692,33 +649,43 @@ class ReportController extends Controller
         return response()->json(['data' => $projects]);
     }
 
-    /** GET /api/project-reports/tasks */
+    /**
+     * GET /api/project-reports/tasks
+     * ✅ FIX: load assignees via pivot task_assignees (many-to-many)
+     */
     public function tasks(Request $request): JsonResponse
     {
-        $user = $request->user();
+        $user       = $request->user();
         $projectIds = $this->getProjectsForUser($user)->pluck('id');
 
         $query = Task::whereIn('project_id', $projectIds)
-            ->with(['project:id,name', 'column:id,name', 'assignee:id,name', 'assignees:id,name']);
+            ->with([
+                'project:id,name',
+                'column:id,name',
+                // ✅ Gunakan relasi assignees (pivot), bukan assignee (belongs-to)
+                'assignees:id,name',
+            ]);
 
-        if ($request->filled('from')) {
-            $query->where('created_at', '>=', $request->input('from'));
-        }
-        if ($request->filled('to')) {
-            $query->where('created_at', '<=', $request->input('to'));
-        }
-        if ($request->filled('priority')) {
-            $query->where('priority', $request->input('priority'));
+        if ($request->filled('from'))     $query->whereDate('created_at', '>=', $request->input('from'));
+        if ($request->filled('to'))       $query->whereDate('created_at', '<=', $request->input('to'));
+        if ($request->filled('priority')) $query->where('priority', $request->input('priority'));
+
+        // ✅ FIX: filter by user_id via pivot task_assignees
+        if ($request->filled('user_id')) {
+            $query->whereHas('assignees', fn($q) => $q->where('users.id', $request->input('user_id')));
         }
 
         $tasks = $query->latest()->get()->map(fn($task) => [
-            'project_name' => $task->project->name ?? '—',
-            'task_title' => $task->title,
-            'column_name' => $task->column->name ?? '—',
-            'priority' => $task->priority,
-            'assigned_name' => $task->assignee->name ?? 'Unassigned',
-            'due_date' => $task->due_date,
-            'created_at' => $task->created_at,
+            'project_name'  => $task->project->name ?? '—',
+            'task_title'    => $task->title,
+            'column_name'   => $task->column->name ?? '—',
+            'priority'      => $task->priority,
+            // ✅ Tampilkan semua assignee sebagai string gabungan
+            'assigned_name' => $task->assignees->isNotEmpty()
+                                    ? $task->assignees->pluck('name')->implode(', ')
+                                    : 'Unassigned',
+            'due_date'      => $task->due_date ? \Carbon\Carbon::parse($task->due_date)->locale('id')->isoFormat('D MMM YYYY') : null,
+            'created_at'    => $task->created_at ? \Carbon\Carbon::parse($task->created_at)->locale('id')->isoFormat('D MMM YYYY') : null,
         ]);
 
         if ($request->input('format') === 'excel') {
@@ -728,27 +695,42 @@ class ReportController extends Controller
         return response()->json(['data' => $tasks]);
     }
 
-    /** GET /api/project-reports/team-performance */
+    /**
+     * GET /api/project-reports/team-performance
+     * ✅ FIX: semua query task pakai pivot task_assignees, bukan assigned_to
+     */
     public function teamPerformance(Request $request): JsonResponse
     {
-        $user = $request->user();
+        $user       = $request->user();
         $projectIds = $this->getProjectsForUser($user)->pluck('id');
 
-        $query = User::whereHas('projects', fn($q) => $q->whereIn('project_id', $projectIds))
-            ->orWhereHas('assignedTasks', fn($q) => $q->whereIn('project_id', $projectIds));
+        // ✅ FIX: cari user yang ada di pivot task_assignees, bukan assigned_to
+        $query = User::where(function ($q) use ($projectIds) {
+            $q->whereHas('projects', fn($pq) => $pq->whereIn('project_id', $projectIds))
+              ->orWhereHas('assignedTasks', fn($tq) => $tq->whereIn('project_id', $projectIds));
+        });
 
-        $users = $query->get()->map(function ($user) use ($projectIds) {
-            $assignedTasks = Task::whereIn('project_id', $projectIds)
-                ->where('assigned_to', $user->id)
-                ->count();
+        // Filter by user_id jika ada
+        if ($request->filled('user_id')) {
+            $query->where('id', $request->input('user_id'));
+        }
 
-            $completedTasks = Task::whereIn('project_id', $projectIds)
-                ->where('assigned_to', $user->id)
+        $users = $query->get()->map(function ($u) use ($projectIds, $request) {
+            // ✅ FIX: hitung task via pivot task_assignees
+            $baseTask = Task::whereIn('project_id', $projectIds)
+                ->whereHas('assignees', fn($q) => $q->where('users.id', $u->id));
+
+            // Terapkan filter tanggal jika ada
+            if ($request->filled('from')) $baseTask->whereDate('created_at', '>=', $request->input('from'));
+            if ($request->filled('to'))   $baseTask->whereDate('created_at', '<=', $request->input('to'));
+
+            $assignedTasks = (clone $baseTask)->count();
+
+            $completedTasks = (clone $baseTask)
                 ->whereHas('column', fn($q) => $q->where('name', 'Prod'))
                 ->count();
 
-            $inProgress = Task::whereIn('project_id', $projectIds)
-                ->where('assigned_to', $user->id)
+            $inProgress = (clone $baseTask)
                 ->whereHas('column', fn($q) => $q->whereNotIn('name', ['Prod', 'Mulai Project']))
                 ->count();
 
@@ -756,33 +738,42 @@ class ReportController extends Controller
                 ? round(($completedTasks / $assignedTasks) * 100)
                 : 0;
 
-            $projectsCount = $user->projects()
+            $projectsCount = $u->projects()
                 ->whereIn('project_id', $projectIds)
                 ->distinct('project_id')
                 ->count();
 
             return [
-                'name' => $user->name,
-                'role' => $user->role ?? '—',
-                'total_assigned' => $assignedTasks,
+                'name'            => $u->name,
+                'role'            => $u->role ?? '—',
+                'total_assigned'  => $assignedTasks,
                 'completed_tasks' => $completedTasks,
-                'in_progress' => $inProgress,
+                'in_progress'     => $inProgress,
                 'completion_rate' => $completionRate,
-                'projects_count' => $projectsCount,
+                'projects_count'  => $projectsCount,
             ];
-        })->filter(fn($u) => $u['total_assigned'] > 0);
+        })->filter(fn($u) => $u['total_assigned'] > 0)->values();
 
         if ($request->input('format') === 'excel') {
-            return $this->exportExcel($users->values(), 'team-performance');
+            return $this->exportExcel($users, 'team-performance');
         }
 
-        return response()->json(['data' => $users->values()]);
+        return response()->json(['data' => $users]);
     }
 
-    // ── Helpers ────────────────────────────────────────────────
+    // ── Helpers ────────────────────────────────────────────────────────────────
 
+    /**
+     * ✅ FIX: Super Admin bisa lihat semua project
+     */
     private function getProjectsForUser($user)
     {
+        // Super Admin: lihat semua project
+        if (in_array($user->role, ['super_admin', 'admin'])) {
+            return Project::query();
+        }
+
+        // User biasa: hanya project yang dibuat atau yang dia jadi member
         return Project::where(function ($q) use ($user) {
             $q->where('created_by', $user->id)
               ->orWhereHas('members', fn($m) => $m->where('user_id', $user->id));
@@ -791,7 +782,7 @@ class ReportController extends Controller
 
     private function exportExcel($data, $filename)
     {
-        // TODO: Implement Excel export
+        // TODO: Implement Excel export for project reports
         return response()->json($data);
     }
 }

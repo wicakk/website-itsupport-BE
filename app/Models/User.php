@@ -3,6 +3,8 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;  // ✅ tambah import
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -37,24 +39,43 @@ class User extends Authenticatable
     }
 
     // ── Relations ────────────────────────────────────────────────────────────
-    public function requestedTickets() {
+    public function requestedTickets(): HasMany {
         return $this->hasMany(Ticket::class, 'requester_id');
     }
 
-    public function assignedTickets() {
+    public function assignedTickets(): HasMany {
         return $this->hasMany(Ticket::class, 'assigned_to');
     }
 
-    public function comments() {
+    public function comments(): HasMany {
         return $this->hasMany(TicketComment::class);
     }
 
-    public function assets() {
+    public function assets(): HasMany {
         return $this->hasMany(Asset::class, 'assigned_to');
     }
 
-    public function articles() {
+    public function articles(): HasMany {
         return $this->hasMany(KnowledgeBase::class, 'author_id');
+    }
+
+    /**
+     * Project yang diikuti user sebagai member
+     * Pivot: project_members (project_id, user_id)
+     */
+    public function projects(): BelongsToMany
+    {
+        return $this->belongsToMany(Project::class, 'project_members', 'user_id', 'project_id');
+    }
+
+    /**
+     * Task yang di-assign ke user via pivot task_assignees
+     * ✅ FIX: many-to-many, bukan hasMany assigned_to
+     */
+    public function assignedTasks(): BelongsToMany
+    {
+        return $this->belongsToMany(Task::class, 'task_assignees', 'user_id', 'task_id')
+                    ->withTimestamps();
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -72,10 +93,10 @@ class User extends Authenticatable
 
     public function getRoleDisplayAttribute(): string {
         return match($this->role) {
-            'super_admin'  => 'Super Admin',
-            'manager_it'   => 'Manager IT',
-            'it_support'   => 'IT Support',
-            default        => 'User',
+            'super_admin' => 'Super Admin',
+            'manager_it'  => 'Manager IT',
+            'it_support'  => 'IT Support',
+            default       => 'User',
         };
     }
 }
