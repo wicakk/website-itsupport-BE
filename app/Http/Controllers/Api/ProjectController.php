@@ -571,4 +571,55 @@ class ProjectController extends Controller
         $comment->delete();
         return response()->json(['success' => true]);
     }
+
+
+
+
+    // ── Column Assignees ──────────────────────────────────────────
+
+public function getColumnAssignees(Request $request, Project $project, Task $task): JsonResponse
+{
+    $this->authorizeProject($request->user(), $project);
+
+    $rows = \Illuminate\Support\Facades\DB::table('task_column_assignees')
+        ->where('task_id', $task->id)
+        ->get();
+
+    $data = $rows->groupBy('column_id')->map(function ($rows, $columnId) {
+        $column    = TaskColumn::find($columnId);
+        $assignees = \App\Models\User::whereIn('id', $rows->pluck('user_id'))
+            ->select('id', 'name', 'initials', 'color')->get();
+        return ['column' => $column, 'assignees' => $assignees];
+    })->values();
+
+    return response()->json(['success' => true, 'data' => $data]);
+}
+
+public function saveColumnAssignees(Request $request, Project $project, Task $task): JsonResponse
+{
+    $this->authorizeProject($request->user(), $project);
+
+    $validated = $request->validate([
+        'column_id'      => 'required|exists:task_columns,id',
+        'assignee_ids'   => 'nullable|array',
+        'assignee_ids.*' => 'exists:users,id',
+    ]);
+
+    \Illuminate\Support\Facades\DB::table('task_column_assignees')
+        ->where('task_id', $task->id)
+        ->where('column_id', $validated['column_id'])
+        ->delete();
+
+    foreach ($validated['assignee_ids'] ?? [] as $userId) {
+        \Illuminate\Support\Facades\DB::table('task_column_assignees')->insert([
+            'task_id'    => $task->id,
+            'column_id'  => $validated['column_id'],
+            'user_id'    => $userId,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+    }
+
+    return response()->json(['success' => true]);
+}
 }

@@ -113,6 +113,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('projects/{project}/tasks/{task}/comments',             [ProjectController::class, 'storeComment']);
     Route::delete('projects/{project}/tasks/{task}/comments/{comment}', [ProjectController::class, 'destroyComment']);
 
+    // ✅ Pastikan 2 baris ini ada di sini:
+    Route::get('projects/{project}/tasks/{task}/column-assignees',  [ProjectController::class, 'getColumnAssignees']);
+    Route::post('projects/{project}/tasks/{task}/column-assignees', [ProjectController::class, 'saveColumnAssignees']);
+
     // ── Master Locations
     Route::apiResource('master/locations', MasterLocationController::class)
          ->parameters(['locations' => 'location']);
